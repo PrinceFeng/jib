@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Google LLC. All rights reserved.
+ * Copyright 2017 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -18,13 +18,9 @@ package com.google.cloud.tools.jib.tar;
 
 import com.google.cloud.tools.jib.blob.Blob;
 import com.google.cloud.tools.jib.blob.Blobs;
-import com.google.common.io.ByteStreams;
-import java.io.BufferedInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
@@ -33,17 +29,11 @@ import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 /** Builds a tarball archive. */
 public class TarStreamBuilder {
 
-  @FunctionalInterface
-  private interface TarArchiveOutputStreamConsumer {
-    void accept(TarArchiveOutputStream tarArchiveOutputStream) throws IOException;
-  }
-
   /**
-   * Maps from {@link TarArchiveEntry} to function that outputs the entry onto a {@link
-   * TarArchiveOutputStream}. The order of the entries is the order they belong in the tarball.
+   * Maps from {@link TarArchiveEntry} to a {@link Blob}. The order of the entries is the order they
+   * belong in the tarball.
    */
-  private final LinkedHashMap<TarArchiveEntry, TarArchiveOutputStreamConsumer> archiveMap =
-      new LinkedHashMap<>();
+  private final LinkedHashMap<TarArchiveEntry, Blob> archiveMap = new LinkedHashMap<>();
 
   /**
    * Writes each entry in the filesystem to the tarball archive stream.
@@ -56,45 +46,49 @@ public class TarStreamBuilder {
         new TarArchiveOutputStream(tarByteStream, StandardCharsets.UTF_8.name())) {
       // Enables PAX extended headers to support long file names.
       tarArchiveOutputStream.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX);
-      for (Map.Entry<TarArchiveEntry, TarArchiveOutputStreamConsumer> entry :
-          archiveMap.entrySet()) {
+      for (Map.Entry<TarArchiveEntry, Blob> entry : archiveMap.entrySet()) {
         tarArchiveOutputStream.putArchiveEntry(entry.getKey());
-        entry.getValue().accept(tarArchiveOutputStream);
+        entry.getValue().writeTo(tarArchiveOutputStream);
         tarArchiveOutputStream.closeArchiveEntry();
       }
     }
   }
 
   /**
-   * Adds an entry to the archive.
+   * Adds a {@link TarArchiveEntry} to the archive.
    *
-   * @param entry the entry to add.
+   * @param entry the {@link TarArchiveEntry}
    */
-  public void addEntry(TarArchiveEntry entry) {
+  public void addTarArchiveEntry(TarArchiveEntry entry) {
     archiveMap.put(
-        entry,
-        tarArchiveOutputStream -> {
-          // Note that this will skip files that don't exist.
-          if (entry.isFile()) {
-            try (InputStream contentStream =
-                new BufferedInputStream(Files.newInputStream(entry.getFile().toPath()))) {
-              ByteStreams.copy(contentStream, tarArchiveOutputStream);
-            }
-          }
-        });
+        entry, entry.isFile() ? Blobs.from(entry.getFile().toPath()) : Blobs.from(ignored -> {}));
   }
 
   /**
-   * Adds a blob to the archive.
+   * Adds a blob to the archive. Note that this should be used with raw bytes and not file contents;
+   * for adding files to the archive, use {@link #addTarArchiveEntry}.
    *
-   * @param contents the blob contents to add to the tarball.
-   * @param name the name of the entry (i.e. filename).
+   * @param contents the bytes to add to the tarball
+   * @param name the name of the entry (i.e. filename)
    */
-  public void addEntry(String contents, String name) {
+  public void addByteEntry(byte[] contents, String name) {
     TarArchiveEntry entry = new TarArchiveEntry(name);
-    byte[] contentsBytes = contents.getBytes(StandardCharsets.UTF_8);
-    entry.setSize(contentsBytes.length);
-    archiveMap.put(entry, tarArchiveOutputStream -> tarArchiveOutputStream.write(contentsBytes));
+    entry.setSize(contents.length);
+    archiveMap.put(entry, Blobs.from(outputStream -> outputStream.write(contents)));
+  }
+
+  /**
+   * Adds a blob to the archive. Note that this should be used with non-file {@link Blob}s; for
+   * adding files to the archive, use {@link #addTarArchiveEntry}.
+   *
+   * @param blob the {@link Blob} to add to the tarball
+   * @param size the size (in bytes) of {@code blob}
+   * @param name the name of the entry (i.e. filename)
+   */
+  public void addBlobEntry(Blob blob, long size, String name) {
+    TarArchiveEntry entry = new TarArchiveEntry(name);
+    entry.setSize(size);
+    archiveMap.put(entry, blob);
   }
 
   /** @return a new {@link Blob} that can stream the uncompressed tarball archive BLOB. */

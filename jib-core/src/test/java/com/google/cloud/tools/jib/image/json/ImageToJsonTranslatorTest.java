@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Google LLC. All rights reserved.
+ * Copyright 2017 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -18,11 +18,11 @@ package com.google.cloud.tools.jib.image.json;
 
 import com.google.cloud.tools.jib.blob.Blob;
 import com.google.cloud.tools.jib.blob.BlobDescriptor;
-import com.google.cloud.tools.jib.cache.CachedLayer;
+import com.google.cloud.tools.jib.blob.Blobs;
 import com.google.cloud.tools.jib.configuration.Port;
-import com.google.cloud.tools.jib.configuration.Port.Protocol;
 import com.google.cloud.tools.jib.image.DescriptorDigest;
 import com.google.cloud.tools.jib.image.Image;
+import com.google.cloud.tools.jib.image.Layer;
 import com.google.cloud.tools.jib.image.LayerPropertyNotFoundException;
 import com.google.cloud.tools.jib.json.JsonTemplateMapper;
 import com.google.common.collect.ImmutableList;
@@ -44,7 +44,6 @@ import java.util.Map;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
-import org.mockito.Mockito;
 
 /** Tests for {@link ImageToJsonTranslator}. */
 public class ImageToJsonTranslatorTest {
@@ -53,26 +52,52 @@ public class ImageToJsonTranslatorTest {
 
   @Before
   public void setUp() throws DigestException, LayerPropertyNotFoundException {
-    Image.Builder<CachedLayer> testImageBuilder = Image.builder();
+    Image.Builder<Layer> testImageBuilder = Image.builder();
 
     testImageBuilder.setCreated(Instant.ofEpochSecond(20));
-    testImageBuilder.setEnvironmentVariable("VAR1", "VAL1");
-    testImageBuilder.setEnvironmentVariable("VAR2", "VAL2");
+    testImageBuilder.addEnvironmentVariable("VAR1", "VAL1");
+    testImageBuilder.addEnvironmentVariable("VAR2", "VAL2");
     testImageBuilder.setEntrypoint(Arrays.asList("some", "entrypoint", "command"));
     testImageBuilder.setJavaArguments(Arrays.asList("arg1", "arg2"));
     testImageBuilder.setExposedPorts(
-        ImmutableList.of(
-            new Port(1000, Protocol.TCP),
-            new Port(2000, Protocol.TCP),
-            new Port(3000, Protocol.UDP)));
+        ImmutableList.of(Port.tcp(1000), Port.tcp(2000), Port.udp(3000)));
+    testImageBuilder.addLabels(ImmutableMap.of("key1", "value1", "key2", "value2"));
+    testImageBuilder.setWorkingDirectory("/some/workspace");
 
     DescriptorDigest fakeDigest =
         DescriptorDigest.fromDigest(
             "sha256:8c662931926fa990b41da3c9f42663a537ccd498130030f9149173a0493832ad");
-    CachedLayer fakeLayer =
-        new CachedLayer(Mockito.mock(Path.class), new BlobDescriptor(1000, fakeDigest), fakeDigest);
-    testImageBuilder.addLayer(fakeLayer);
+    testImageBuilder.addLayer(
+        new Layer() {
 
+          @Override
+          public Blob getBlob() throws LayerPropertyNotFoundException {
+            return Blobs.from("ignored");
+          }
+
+          @Override
+          public BlobDescriptor getBlobDescriptor() throws LayerPropertyNotFoundException {
+            return new BlobDescriptor(1000, fakeDigest);
+          }
+
+          @Override
+          public DescriptorDigest getDiffId() throws LayerPropertyNotFoundException {
+            return fakeDigest;
+          }
+        });
+    testImageBuilder.addHistory(
+        HistoryEntry.builder()
+            .setCreationTimestamp(Instant.EPOCH)
+            .setAuthor("Bazel")
+            .setCreatedBy("bazel build ...")
+            .setEmptyLayer(true)
+            .build());
+    testImageBuilder.addHistory(
+        HistoryEntry.builder()
+            .setCreationTimestamp(Instant.ofEpochSecond(20))
+            .setAuthor("Jib")
+            .setCreatedBy("jib")
+            .build());
     imageToJsonTranslator = new ImageToJsonTranslator(testImageBuilder.build());
   }
 
@@ -104,11 +129,17 @@ public class ImageToJsonTranslatorTest {
 
   @Test
   public void testPortListToMap() {
-    ImmutableList<Port> input =
-        ImmutableList.of(new Port(1000, Protocol.TCP), new Port(2000, Protocol.UDP));
+    ImmutableList<Port> input = ImmutableList.of(Port.tcp(1000), Port.udp(2000));
     ImmutableSortedMap<String, Map<?, ?>> expected =
         ImmutableSortedMap.of("1000/tcp", ImmutableMap.of(), "2000/udp", ImmutableMap.of());
     Assert.assertEquals(expected, ImageToJsonTranslator.portListToMap(input));
+  }
+
+  @Test
+  public void testEnvironmentMapToList() {
+    ImmutableMap<String, String> input = ImmutableMap.of("NAME1", "VALUE1", "NAME2", "VALUE2");
+    ImmutableList<String> expected = ImmutableList.of("NAME1=VALUE1", "NAME2=VALUE2");
+    Assert.assertEquals(expected, ImageToJsonTranslator.environmentMapToList(input));
   }
 
   /** Tests translation of image to {@link BuildableManifestTemplate}. */

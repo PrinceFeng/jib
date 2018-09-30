@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,11 +16,10 @@
 
 package com.google.cloud.tools.jib.frontend;
 
-import com.google.cloud.tools.jib.builder.BuildConfiguration;
-import com.google.cloud.tools.jib.builder.BuildLogger;
-import com.google.cloud.tools.jib.filesystem.DirectoryWalker;
-import com.google.common.annotations.VisibleForTesting;
+import com.google.cloud.tools.jib.event.EventDispatcher;
+import com.google.cloud.tools.jib.event.events.LogEvent;
 import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Modifier;
@@ -28,114 +27,135 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
+import java.util.Optional;
 import javassist.ClassPool;
 import javassist.CtClass;
 import javassist.CtMethod;
 import javassist.NotFoundException;
-import javax.annotation.Nullable;
 
-/** Infers the main class in an application. */
+/**
+ * Finds main classes in a list of class files. Main classes are classes that define the {@code
+ * public static void main(String[] args)} method.
+ */
 public class MainClassFinder {
 
+  /** The result of a call to {@link #find}. */
+  public static class Result {
+
+    /** The type of result. */
+    public enum Type {
+
+      // Found a single main class.
+      MAIN_CLASS_FOUND,
+
+      // Did not find any main class.
+      MAIN_CLASS_NOT_FOUND,
+
+      // Found multiple main classes.
+      MULTIPLE_MAIN_CLASSES
+    }
+
+    private static Result success(String foundMainClass) {
+      return new Result(Type.MAIN_CLASS_FOUND, Collections.singletonList(foundMainClass));
+    }
+
+    private static Result mainClassNotFound() {
+      return new Result(Type.MAIN_CLASS_NOT_FOUND, Collections.emptyList());
+    }
+
+    private static Result multipleMainClasses(List<String> foundMainClasses) {
+      return new Result(Type.MULTIPLE_MAIN_CLASSES, foundMainClasses);
+    }
+
+    private final Type type;
+    private final List<String> foundMainClasses;
+
+    private Result(Type type, List<String> foundMainClasses) {
+      this.foundMainClasses = foundMainClasses;
+      this.type = type;
+    }
+
+    /**
+     * Gets the found main class. Only call if {@link #getType} is {@link Type#MAIN_CLASS_FOUND}.
+     *
+     * @return the found main class
+     */
+    public String getFoundMainClass() {
+      Preconditions.checkState(Type.MAIN_CLASS_FOUND == type);
+      Preconditions.checkState(foundMainClasses.size() == 1);
+      return foundMainClasses.get(0);
+    }
+
+    /**
+     * Gets the type of the result.
+     *
+     * @return the type of the result
+     */
+    public Type getType() {
+      return Preconditions.checkNotNull(type);
+    }
+
+    /**
+     * Gets the found main classes.
+     *
+     * @return the found main classes
+     */
+    public List<String> getFoundMainClasses() {
+      return foundMainClasses;
+    }
+  }
+
+  private final ImmutableList<Path> files;
+  private final EventDispatcher eventDispatcher;
+
   /**
-   * If {@code mainClass} is {@code null}, tries to infer main class in this order:
+   * Finds a class with {@code psvm} (see class javadoc) in {@code files}.
    *
-   * <ul>
-   *   <li>1. Looks in a {@code jar} plugin provided by {@code projectProperties} ({@code
-   *       maven-jar-plugin} for maven or {@code jar} task for gradle).
-   *   <li>2. Searches for a class defined with a main method.
-   * </ul>
-   *
-   * <p>Warns if main class is not valid, or throws an error if no valid main class is not found.
-   *
-   * @param mainClass the explicitly configured main class ({@code null} if not configured).
-   * @param projectProperties properties containing plugin information and help messages.
-   * @return the name of the main class to be used for the container entrypoint.
-   * @throws MainClassInferenceException if no valid main class is configured or discovered.
+   * @param files the files to check
+   * @param eventDispatcher used for dispatching log events.
    */
-  public static String resolveMainClass(
-      @Nullable String mainClass, ProjectProperties projectProperties)
-      throws MainClassInferenceException {
-    BuildLogger logger = projectProperties.getLogger();
-    if (mainClass == null) {
-      logger.info(
-          "Searching for main class... Add a 'mainClass' configuration to '"
-              + projectProperties.getPluginName()
-              + "' to improve build speed.");
-      mainClass = projectProperties.getMainClassFromJar();
-      if (mainClass == null || !BuildConfiguration.isValidJavaClass(mainClass)) {
-        logger.debug(
-            "Could not find a valid main class specified in "
-                + projectProperties.getJarPluginName()
-                + "; attempting to infer main class.");
-
-        try {
-          // Adds each file in the classes output directory to the classes files list.
-          Set<Path> visitedRoots = new HashSet<>();
-          List<String> mainClasses = new ArrayList<>();
-          for (Path classPath : projectProperties.getSourceFilesConfiguration().getClassesFiles()) {
-            Path root = classPath.getParent();
-            if (visitedRoots.contains(root)) {
-              continue;
-            }
-            visitedRoots.add(root);
-            mainClasses.addAll(findMainClasses(root, logger));
-          }
-
-          if (mainClasses.size() == 1) {
-            // Valid class found; use inferred main class
-            mainClass = mainClasses.get(0);
-          } else if (mainClasses.size() == 0 && mainClass == null) {
-            // No main class found anywhere
-            throw new MainClassInferenceException(
-                projectProperties
-                    .getMainClassHelpfulSuggestions("Main class was not found")
-                    .forMainClassNotFound(projectProperties.getPluginName()));
-          } else if (mainClasses.size() > 1 && mainClass == null) {
-            // More than one main class found with no jar plugin to fall back on; error
-            throw new MainClassInferenceException(
-                projectProperties
-                    .getMainClassHelpfulSuggestions(
-                        "Multiple valid main classes were found: " + String.join(", ", mainClasses))
-                    .forMainClassNotFound(projectProperties.getPluginName()));
-          }
-        } catch (IOException ex) {
-          throw new MainClassInferenceException(
-              projectProperties
-                  .getMainClassHelpfulSuggestions("Failed to get main class")
-                  .forMainClassNotFound(projectProperties.getPluginName()),
-              ex);
-        }
-      }
-    }
-    Preconditions.checkNotNull(mainClass);
-    if (!BuildConfiguration.isValidJavaClass(mainClass)) {
-      logger.warn("'mainClass' is not a valid Java class : " + mainClass);
-    }
-
-    return mainClass;
+  public MainClassFinder(ImmutableList<Path> files, EventDispatcher eventDispatcher) {
+    this.files = files;
+    this.eventDispatcher = eventDispatcher;
   }
 
   /**
-   * Finds the classes with {@code public static void main(String[] args)} in {@code rootDirectory}.
+   * Tries to find classes with {@code psvm} (see class javadoc) in {@link #files}.
    *
-   * @param rootDirectory directory containing the {@code .class} files.
-   * @param buildLogger used for displaying status messages.
-   * @return a list of class names containing a main method.
-   * @throws IOException if searching the root directory fails.
+   * @return the {@link Result} of the main class finding attempt
    */
-  @VisibleForTesting
-  static List<String> findMainClasses(Path rootDirectory, BuildLogger buildLogger)
-      throws IOException {
-    // Makes sure rootDirectory is valid.
-    if (!Files.exists(rootDirectory) || !Files.isDirectory(rootDirectory)) {
-      return Collections.emptyList();
+  public Result find() {
+    List<String> mainClasses = new ArrayList<>();
+    for (Path file : files) {
+      findMainClass(file).ifPresent(mainClasses::add);
     }
 
-    List<String> classNames = new ArrayList<>();
+    if (mainClasses.size() == 1) {
+      // Valid class found.
+      return Result.success(mainClasses.get(0));
+    }
+    if (mainClasses.size() == 0) {
+      // No main class found anywhere.
+      return Result.mainClassNotFound();
+    }
+    // More than one main class found.
+    return Result.multipleMainClasses(mainClasses);
+  }
+
+  /**
+   * Checks the {@code file} for being a {@code .class} file with {@code public static void
+   * main(String[] args)}.
+   *
+   * @param file the file
+   * @return name of the class containing a main method, or {@link Optional#empty} if {@code
+   *     classFile} is not a class
+   */
+  private Optional<String> findMainClass(Path file) {
+    // Makes sure classFile is valid.
+    if (!Files.exists(file) || !Files.isRegularFile(file) || !file.toString().endsWith(".class")) {
+      return Optional.empty();
+    }
 
     ClassPool classPool = new ClassPool();
     classPool.appendSystemPath();
@@ -143,39 +163,31 @@ public class MainClassFinder {
     try {
       CtClass[] mainMethodParams = new CtClass[] {classPool.get("java.lang.String[]")};
 
-      new DirectoryWalker(rootDirectory)
-          .filter(Files::isRegularFile)
-          .filter(path -> path.toString().endsWith(".class"))
-          .walk(
-              classFile -> {
-                try (InputStream classFileInputStream = Files.newInputStream(classFile)) {
-                  CtClass fileClass = classPool.makeClass(classFileInputStream);
+      try (InputStream classFileInputStream = Files.newInputStream(file)) {
+        CtClass fileClass = classPool.makeClass(classFileInputStream);
 
-                  // Check if class contains 'public static void main(String[] args)'.
-                  CtMethod mainMethod = fileClass.getDeclaredMethod("main", mainMethodParams);
+        // Check if class contains 'psvm' (see class javadoc).
+        CtMethod mainMethod = fileClass.getDeclaredMethod("main", mainMethodParams);
 
-                  if (CtClass.voidType.equals(mainMethod.getReturnType())
-                      && Modifier.isStatic(mainMethod.getModifiers())
-                      && Modifier.isPublic(mainMethod.getModifiers())) {
-                    classNames.add(fileClass.getName());
-                  }
+        if (CtClass.voidType.equals(mainMethod.getReturnType())
+            && Modifier.isStatic(mainMethod.getModifiers())
+            && Modifier.isPublic(mainMethod.getModifiers())) {
+          return Optional.of(fileClass.getName());
+        }
 
-                } catch (NotFoundException ex) {
-                  // Ignores main method not found.
+      } catch (NotFoundException ex) {
+        // Ignores main method not found.
 
-                } catch (IOException ex) {
-                  // Could not read class file.
-                  buildLogger.warn("Could not read class file: " + classFile);
-                }
-              });
-
-      return classNames;
+      } catch (IOException ex) {
+        // Could not read class file.
+        eventDispatcher.dispatch(LogEvent.warn("Could not read file: " + file));
+      }
 
     } catch (NotFoundException ex) {
       // Thrown if 'java.lang.String' is not found in classPool.
       throw new RuntimeException(ex);
     }
-  }
 
-  private MainClassFinder() {}
+    return Optional.empty();
+  }
 }

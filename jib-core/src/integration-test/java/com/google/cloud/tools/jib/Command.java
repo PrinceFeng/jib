@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -35,6 +35,11 @@ public class Command {
     this.command = Arrays.asList(command);
   }
 
+  /** Instantiate with a command. */
+  public Command(List<String> command) {
+    this.command = command;
+  }
+
   /** Runs the command. */
   public String run() throws IOException, InterruptedException {
     return run(null);
@@ -57,7 +62,10 @@ public class Command {
       String output = CharStreams.toString(inputStreamReader);
 
       if (process.waitFor() != 0) {
-        throw new RuntimeException("Command '" + String.join(" ", command) + "' failed");
+        String stderr =
+            CharStreams.toString(
+                new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8));
+        throw new RuntimeException("Command '" + String.join(" ", command) + "' failed: " + stderr);
       }
 
       return output;

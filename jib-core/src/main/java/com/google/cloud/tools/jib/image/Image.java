@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Google LLC. All rights reserved.
+ * Copyright 2017 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -17,7 +17,9 @@
 package com.google.cloud.tools.jib.image;
 
 import com.google.cloud.tools.jib.configuration.Port;
+import com.google.cloud.tools.jib.image.json.HistoryEntry;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -30,12 +32,15 @@ public class Image<T extends Layer> {
   public static class Builder<T extends Layer> {
 
     private final ImageLayers.Builder<T> imageLayersBuilder = ImageLayers.builder();
-    private final ImmutableList.Builder<String> environmentBuilder = ImmutableList.builder();
+    private final ImmutableList.Builder<HistoryEntry> historyBuilder = ImmutableList.builder();
+    private final ImmutableMap.Builder<String, String> environmentBuilder = ImmutableMap.builder();
+    private final ImmutableMap.Builder<String, String> labelsBuilder = ImmutableMap.builder();
 
     @Nullable private Instant created;
-    private ImmutableList<String> entrypoint = ImmutableList.of();
-    private ImmutableList<String> javaArguments = ImmutableList.of();
-    private ImmutableList<Port> exposedPorts = ImmutableList.of();
+    @Nullable private ImmutableList<String> entrypoint;
+    @Nullable private ImmutableList<String> javaArguments;
+    @Nullable private ImmutableList<Port> exposedPorts;
+    @Nullable private String workingDirectory;
 
     /**
      * Sets the image creation time.
@@ -49,14 +54,14 @@ public class Image<T extends Layer> {
     }
 
     /**
-     * Sets the environment with a map from environment variable names to values.
+     * Adds a map of environment variables to the current map.
      *
      * @param environment the map of environment variables
      * @return this
      */
-    public Builder<T> setEnvironment(Map<String, String> environment) {
-      for (Map.Entry<String, String> environmentVariable : environment.entrySet()) {
-        setEnvironmentVariable(environmentVariable.getKey(), environmentVariable.getValue());
+    public Builder<T> addEnvironment(@Nullable Map<String, String> environment) {
+      if (environment != null) {
+        this.environmentBuilder.putAll(environment);
       }
       return this;
     }
@@ -68,19 +73,8 @@ public class Image<T extends Layer> {
      * @param value the value to set it to
      * @return this
      */
-    public Builder<T> setEnvironmentVariable(String name, String value) {
-      environmentBuilder.add(name + "=" + value);
-      return this;
-    }
-
-    /**
-     * Adds an environment variable definition in the format {@code NAME=VALUE}.
-     *
-     * @param environmentVariableDefinition the definition to add
-     * @return this
-     */
-    public Builder<T> addEnvironmentVariableDefinition(String environmentVariableDefinition) {
-      environmentBuilder.add(environmentVariableDefinition);
+    public Builder<T> addEnvironmentVariable(String name, String value) {
+      environmentBuilder.put(name, value);
       return this;
     }
 
@@ -90,8 +84,8 @@ public class Image<T extends Layer> {
      * @param entrypoint the list of entrypoint tokens
      * @return this
      */
-    public Builder<T> setEntrypoint(List<String> entrypoint) {
-      this.entrypoint = ImmutableList.copyOf(entrypoint);
+    public Builder<T> setEntrypoint(@Nullable List<String> entrypoint) {
+      this.entrypoint = (entrypoint == null) ? null : ImmutableList.copyOf(entrypoint);
       return this;
     }
 
@@ -101,8 +95,8 @@ public class Image<T extends Layer> {
      * @param javaArguments the list of main args to add
      * @return this
      */
-    public Builder<T> setJavaArguments(List<String> javaArguments) {
-      this.javaArguments = ImmutableList.copyOf(javaArguments);
+    public Builder<T> setJavaArguments(@Nullable List<String> javaArguments) {
+      this.javaArguments = (javaArguments == null) ? null : ImmutableList.copyOf(javaArguments);
       return this;
     }
 
@@ -112,8 +106,44 @@ public class Image<T extends Layer> {
      * @param exposedPorts the list of exposed ports to add
      * @return this
      */
-    public Builder<T> setExposedPorts(ImmutableList<Port> exposedPorts) {
-      this.exposedPorts = exposedPorts;
+    public Builder<T> setExposedPorts(@Nullable List<Port> exposedPorts) {
+      this.exposedPorts = (exposedPorts == null) ? null : ImmutableList.copyOf(exposedPorts);
+      return this;
+    }
+
+    /**
+     * Adds items to the "Labels" field in the container configuration.
+     *
+     * @param labels the map of labels to add
+     * @return this
+     */
+    public Builder<T> addLabels(@Nullable Map<String, String> labels) {
+      if (labels != null) {
+        labelsBuilder.putAll(labels);
+      }
+      return this;
+    }
+
+    /**
+     * Adds an item to the "Labels" field in the container configuration.
+     *
+     * @param name the name of the label
+     * @param value the value of the label
+     * @return this
+     */
+    public Builder<T> addLabel(String name, String value) {
+      labelsBuilder.put(name, value);
+      return this;
+    }
+
+    /**
+     * Sets the item in the "WorkingDir" field in the container configuration.
+     *
+     * @param workingDirectory the working directory
+     * @return this
+     */
+    public Builder<T> setWorkingDirectory(@Nullable String workingDirectory) {
+      this.workingDirectory = workingDirectory;
       return this;
     }
 
@@ -129,14 +159,28 @@ public class Image<T extends Layer> {
       return this;
     }
 
+    /**
+     * Adds a history element to the image.
+     *
+     * @param history the history object to add
+     * @return this
+     */
+    public Builder<T> addHistory(HistoryEntry history) {
+      historyBuilder.add(history);
+      return this;
+    }
+
     public Image<T> build() {
       return new Image<>(
           created,
           imageLayersBuilder.build(),
+          historyBuilder.build(),
           environmentBuilder.build(),
-          ImmutableList.copyOf(entrypoint),
-          ImmutableList.copyOf(javaArguments),
-          exposedPorts);
+          entrypoint,
+          javaArguments,
+          exposedPorts,
+          labelsBuilder.build(),
+          workingDirectory);
     }
   }
 
@@ -150,31 +194,46 @@ public class Image<T extends Layer> {
   /** The layers of the image, in the order in which they are applied. */
   private final ImageLayers<T> layers;
 
+  /** The commands used to build each layer of the image */
+  private final ImmutableList<HistoryEntry> history;
+
   /** Environment variable definitions for running the image, in the format {@code NAME=VALUE}. */
-  private final ImmutableList<String> environmentBuilder;
+  @Nullable private final ImmutableMap<String, String> environment;
 
   /** Initial command to run when running the image. */
-  private final ImmutableList<String> entrypoint;
+  @Nullable private final ImmutableList<String> entrypoint;
 
   /** Arguments to pass into main when running the image. */
-  private final ImmutableList<String> javaArguments;
+  @Nullable private final ImmutableList<String> javaArguments;
 
   /** Ports that the container listens on. */
-  private final ImmutableList<Port> exposedPorts;
+  @Nullable private final ImmutableList<Port> exposedPorts;
+
+  /** Labels on the container configuration */
+  @Nullable private final ImmutableMap<String, String> labels;
+
+  /** Working directory on the container configuration */
+  @Nullable private final String workingDirectory;
 
   private Image(
       @Nullable Instant created,
       ImageLayers<T> layers,
-      ImmutableList<String> environment,
-      ImmutableList<String> entrypoint,
-      ImmutableList<String> javaArguments,
-      ImmutableList<Port> exposedPorts) {
+      ImmutableList<HistoryEntry> history,
+      @Nullable ImmutableMap<String, String> environment,
+      @Nullable ImmutableList<String> entrypoint,
+      @Nullable ImmutableList<String> javaArguments,
+      @Nullable ImmutableList<Port> exposedPorts,
+      @Nullable ImmutableMap<String, String> labels,
+      @Nullable String workingDirectory) {
     this.created = created;
     this.layers = layers;
-    this.environmentBuilder = environment;
+    this.history = history;
+    this.environment = environment;
     this.entrypoint = entrypoint;
     this.javaArguments = javaArguments;
     this.exposedPorts = exposedPorts;
+    this.labels = labels;
+    this.workingDirectory = workingDirectory;
   }
 
   @Nullable
@@ -182,23 +241,41 @@ public class Image<T extends Layer> {
     return created;
   }
 
-  public ImmutableList<String> getEnvironment() {
-    return environmentBuilder;
+  @Nullable
+  public ImmutableMap<String, String> getEnvironment() {
+    return environment;
   }
 
+  @Nullable
   public ImmutableList<String> getEntrypoint() {
     return entrypoint;
   }
 
+  @Nullable
   public ImmutableList<String> getJavaArguments() {
     return javaArguments;
   }
 
+  @Nullable
   public ImmutableList<Port> getExposedPorts() {
     return exposedPorts;
   }
 
+  @Nullable
+  public ImmutableMap<String, String> getLabels() {
+    return labels;
+  }
+
+  @Nullable
+  public String getWorkingDirectory() {
+    return workingDirectory;
+  }
+
   public ImmutableList<T> getLayers() {
     return layers.getLayers();
+  }
+
+  public ImmutableList<HistoryEntry> getHistory() {
+    return history;
   }
 }

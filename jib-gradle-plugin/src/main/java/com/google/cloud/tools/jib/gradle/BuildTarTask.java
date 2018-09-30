@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,30 +16,21 @@
 
 package com.google.cloud.tools.jib.gradle;
 
-import com.google.cloud.tools.jib.builder.BuildConfiguration;
-import com.google.cloud.tools.jib.cache.CacheDirectoryCreationException;
-import com.google.cloud.tools.jib.configuration.CacheConfiguration;
-import com.google.cloud.tools.jib.configuration.LayerConfiguration;
-import com.google.cloud.tools.jib.frontend.BuildStepsExecutionException;
-import com.google.cloud.tools.jib.frontend.BuildStepsRunner;
-import com.google.cloud.tools.jib.frontend.ExposedPortsParser;
-import com.google.cloud.tools.jib.frontend.HelpfulSuggestions;
-import com.google.cloud.tools.jib.http.Authorization;
+import com.google.cloud.tools.jib.configuration.BuildConfiguration;
+import com.google.cloud.tools.jib.configuration.CacheDirectoryCreationException;
+import com.google.cloud.tools.jib.configuration.ImageConfiguration;
+import com.google.cloud.tools.jib.filesystem.AbsoluteUnixPath;
 import com.google.cloud.tools.jib.image.ImageReference;
 import com.google.cloud.tools.jib.image.InvalidImageReferenceException;
-import com.google.cloud.tools.jib.registry.RegistryClient;
-import com.google.cloud.tools.jib.registry.credentials.RegistryCredentials;
+import com.google.cloud.tools.jib.plugins.common.BuildStepsExecutionException;
+import com.google.cloud.tools.jib.plugins.common.BuildStepsRunner;
+import com.google.cloud.tools.jib.plugins.common.ConfigurationPropertyValidator;
+import com.google.cloud.tools.jib.plugins.common.HelpfulSuggestions;
 import com.google.common.base.Preconditions;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.time.Instant;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 import javax.annotation.Nullable;
 import org.gradle.api.DefaultTask;
-import org.gradle.api.GradleException;
 import org.gradle.api.file.FileCollection;
 import org.gradle.api.tasks.InputFiles;
 import org.gradle.api.tasks.Nested;
@@ -48,13 +39,9 @@ import org.gradle.api.tasks.TaskAction;
 import org.gradle.api.tasks.options.Option;
 
 /** Builds a container image to a tarball. */
-public class BuildTarTask extends DefaultTask {
+public class BuildTarTask extends DefaultTask implements JibTask {
 
-  /** {@code User-Agent} header suffix to send to the registry. */
-  private static final String USER_AGENT_SUFFIX = "jib-gradle-plugin";
-
-  private static final HelpfulSuggestions HELPFUL_SUGGESTIONS =
-      HelpfulSuggestionsProvider.get("Building image tarball failed");
+  private static final String HELPFUL_SUGGESTIONS_PREFIX = "Building image tarball failed";
 
   @Nullable private JibExtension jibExtension;
 
@@ -87,7 +74,7 @@ public class BuildTarTask extends DefaultTask {
   @InputFiles
   public FileCollection getInputFiles() {
     return GradleProjectProperties.getInputFiles(
-        Preconditions.checkNotNull(jibExtension).getExtraDirectory(), getProject());
+        Preconditions.checkNotNull(jibExtension).getExtraDirectoryPath().toFile(), getProject());
   }
 
   /**
@@ -110,86 +97,54 @@ public class BuildTarTask extends DefaultTask {
   }
 
   @TaskAction
-  public void buildTar() throws InvalidImageReferenceException, IOException {
+  public void buildTar()
+      throws InvalidImageReferenceException, BuildStepsExecutionException, IOException,
+          CacheDirectoryCreationException {
     // Asserts required @Input parameters are not null.
     Preconditions.checkNotNull(jibExtension);
-    GradleBuildLogger gradleBuildLogger = new GradleBuildLogger(getLogger());
-    jibExtension.handleDeprecatedParameters(gradleBuildLogger);
-
-    if (Boolean.getBoolean("sendCredentialsOverHttp")) {
-      gradleBuildLogger.warn(
-          "Authentication over HTTP is enabled. It is strongly recommended that you do not enable "
-              + "this on a public network!");
-    }
-    RegistryCredentials knownBaseRegistryCredentials = null;
-    Authorization fromAuthorization = jibExtension.getFrom().getImageAuthorization();
-    if (fromAuthorization != null) {
-      knownBaseRegistryCredentials = new RegistryCredentials("jib.from.auth", fromAuthorization);
-    }
-
+    AbsoluteUnixPath appRoot = PluginConfigurationProcessor.getAppRootChecked(jibExtension);
     GradleProjectProperties gradleProjectProperties =
-        GradleProjectProperties.getForProject(getProject(), gradleBuildLogger);
-    String mainClass = gradleProjectProperties.getMainClass(jibExtension);
+        GradleProjectProperties.getForProject(
+            getProject(), getLogger(), jibExtension.getExtraDirectoryPath(), appRoot);
+
+    GradleHelpfulSuggestionsBuilder gradleHelpfulSuggestionsBuilder =
+        new GradleHelpfulSuggestionsBuilder(HELPFUL_SUGGESTIONS_PREFIX, jibExtension);
     ImageReference targetImage =
-        gradleProjectProperties.getGeneratedTargetDockerTag(jibExtension, gradleBuildLogger);
+        ConfigurationPropertyValidator.getGeneratedTargetDockerTag(
+            jibExtension.getTargetImage(),
+            gradleProjectProperties.getEventDispatcher(),
+            getProject().getName(),
+            getProject().getVersion().toString(),
+            gradleHelpfulSuggestionsBuilder.build());
 
-    // Builds the BuildConfiguration.
-    // TODO: Consolidate with BuildImageTask/BuildDockerTask.
-    BuildConfiguration.Builder buildConfigurationBuilder =
-        BuildConfiguration.builder(gradleBuildLogger)
-            .setBaseImage(ImageReference.parse(jibExtension.getBaseImage()))
-            .setTargetImage(targetImage)
-            .setBaseImageCredentialHelperName(jibExtension.getFrom().getCredHelper())
-            .setKnownBaseRegistryCredentials(knownBaseRegistryCredentials)
-            .setMainClass(mainClass)
-            .setJavaArguments(jibExtension.getArgs())
-            .setJvmFlags(jibExtension.getJvmFlags())
-            .setExposedPorts(ExposedPortsParser.parse(jibExtension.getExposedPorts()))
-            .setAllowHttp(jibExtension.getAllowInsecureRegistries());
-    if (Files.exists(jibExtension.getExtraDirectory().toPath())) {
-      try (Stream<Path> extraFilesLayerDirectoryFiles =
-          Files.list(jibExtension.getExtraDirectory().toPath())) {
-        buildConfigurationBuilder.setExtraFilesLayerConfiguration(
-            LayerConfiguration.builder()
-                .addEntry(extraFilesLayerDirectoryFiles.collect(Collectors.toList()), "/")
-                .build());
-      }
-    }
-    CacheConfiguration applicationLayersCacheConfiguration =
-        CacheConfiguration.forPath(gradleProjectProperties.getCacheDirectory());
-    buildConfigurationBuilder.setApplicationLayersCacheConfiguration(
-        applicationLayersCacheConfiguration);
-    if (jibExtension.getUseOnlyProjectCache()) {
-      buildConfigurationBuilder.setBaseImageLayersCacheConfiguration(
-          applicationLayersCacheConfiguration);
-    }
-    if (jibExtension.getUseCurrentTimestamp()) {
-      gradleBuildLogger.warn(
-          "Setting image creation time to current time; your image may not be reproducible.");
-      buildConfigurationBuilder.setCreationTime(Instant.now());
-    }
+    PluginConfigurationProcessor pluginConfigurationProcessor =
+        PluginConfigurationProcessor.processCommonConfiguration(
+            getLogger(), jibExtension, gradleProjectProperties);
 
-    BuildConfiguration buildConfiguration = buildConfigurationBuilder.build();
+    BuildConfiguration buildConfiguration =
+        pluginConfigurationProcessor
+            .getBuildConfigurationBuilder()
+            .setBaseImageConfiguration(
+                pluginConfigurationProcessor.getBaseImageConfigurationBuilder().build())
+            .setTargetImageConfiguration(ImageConfiguration.builder(targetImage).build())
+            .setContainerConfiguration(
+                pluginConfigurationProcessor.getContainerConfigurationBuilder().build())
+            .build();
 
-    // TODO: Instead of disabling logging, have authentication credentials be provided
-    GradleBuildLogger.disableHttpLogging();
+    HelpfulSuggestions helpfulSuggestions =
+        gradleHelpfulSuggestionsBuilder
+            .setBaseImageReference(buildConfiguration.getBaseImageConfiguration().getImage())
+            .setBaseImageHasConfiguredCredentials(
+                pluginConfigurationProcessor.isBaseImageCredentialPresent())
+            .setTargetImageReference(buildConfiguration.getTargetImageConfiguration().getImage())
+            .build();
 
-    RegistryClient.setUserAgentSuffix(USER_AGENT_SUFFIX);
-
-    // Uses a directory in the Gradle build cache as the Jib cache.
-    try {
-      BuildStepsRunner.forBuildTar(
-              Paths.get(getTargetPath()),
-              buildConfiguration,
-              gradleProjectProperties.getSourceFilesConfiguration())
-          .build(HELPFUL_SUGGESTIONS);
-
-    } catch (CacheDirectoryCreationException | BuildStepsExecutionException ex) {
-      throw new GradleException(ex.getMessage(), ex.getCause());
-    }
+    BuildStepsRunner.forBuildTar(Paths.get(getTargetPath()), buildConfiguration)
+        .build(helpfulSuggestions);
   }
 
-  BuildTarTask setJibExtension(JibExtension jibExtension) {
+  @Override
+  public BuildTarTask setJibExtension(JibExtension jibExtension) {
     this.jibExtension = jibExtension;
     return this;
   }

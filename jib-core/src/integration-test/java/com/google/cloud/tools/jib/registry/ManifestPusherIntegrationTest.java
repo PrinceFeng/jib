@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Google LLC. All rights reserved.
+ * Copyright 2017 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -20,6 +20,7 @@ import com.google.api.client.http.HttpResponseException;
 import com.google.api.client.http.HttpStatusCodes;
 import com.google.cloud.tools.jib.blob.Blob;
 import com.google.cloud.tools.jib.blob.Blobs;
+import com.google.cloud.tools.jib.event.EventDispatcher;
 import com.google.cloud.tools.jib.image.DescriptorDigest;
 import com.google.cloud.tools.jib.image.json.ManifestTemplate;
 import com.google.cloud.tools.jib.image.json.V22ManifestTemplate;
@@ -33,15 +34,20 @@ import org.junit.Test;
 public class ManifestPusherIntegrationTest {
 
   @ClassRule public static LocalRegistry localRegistry = new LocalRegistry(5000);
+  private static final EventDispatcher EVENT_DISPATCHER = jibEvent -> {};
 
   @Test
-  public void testPush_missingBlobs() throws IOException, RegistryException {
+  public void testPush_missingBlobs() throws IOException, RegistryException, InterruptedException {
+    localRegistry.pullAndPushToLocal("busybox", "busybox");
+
     RegistryClient registryClient =
-        RegistryClient.factory("gcr.io", "distroless/java").newRegistryClient();
+        RegistryClient.factory(EVENT_DISPATCHER, "gcr.io", "distroless/java").newRegistryClient();
     ManifestTemplate manifestTemplate = registryClient.pullManifest("latest");
 
     registryClient =
-        RegistryClient.factory("localhost:5000", "busybox").setAllowHttp(true).newRegistryClient();
+        RegistryClient.factory(EVENT_DISPATCHER, "localhost:5000", "busybox")
+            .setAllowInsecureRegistries(true)
+            .newRegistryClient();
     try {
       registryClient.pushManifest((V22ManifestTemplate) manifestTemplate, "latest");
       Assert.fail("Pushing manifest without its BLOBs should fail");
@@ -55,7 +61,9 @@ public class ManifestPusherIntegrationTest {
 
   /** Tests manifest pushing. This test is a comprehensive test of push and pull. */
   @Test
-  public void testPush() throws DigestException, IOException, RegistryException {
+  public void testPush()
+      throws DigestException, IOException, RegistryException, InterruptedException {
+    localRegistry.pullAndPushToLocal("busybox", "busybox");
     Blob testLayerBlob = Blobs.from("crepecake");
     // Known digest for 'crepecake'
     DescriptorDigest testLayerBlobDigest =
@@ -73,13 +81,13 @@ public class ManifestPusherIntegrationTest {
 
     // Pushes the BLOBs.
     RegistryClient registryClient =
-        RegistryClient.factory("localhost:5000", "testimage")
-            .setAllowHttp(true)
+        RegistryClient.factory(EVENT_DISPATCHER, "localhost:5000", "testimage")
+            .setAllowInsecureRegistries(true)
             .newRegistryClient();
-    Assert.assertFalse(registryClient.pushBlob(testLayerBlobDigest, testLayerBlob));
+    Assert.assertFalse(registryClient.pushBlob(testLayerBlobDigest, testLayerBlob, null));
     Assert.assertFalse(
         registryClient.pushBlob(
-            testContainerConfigurationBlobDigest, testContainerConfigurationBlob));
+            testContainerConfigurationBlobDigest, testContainerConfigurationBlob, null));
 
     // Pushes the manifest.
     registryClient.pushManifest(expectedManifestTemplate, "latest");

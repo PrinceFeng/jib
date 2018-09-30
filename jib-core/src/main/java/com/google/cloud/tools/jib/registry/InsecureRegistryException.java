@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -24,6 +24,9 @@ import java.net.URL;
 public class InsecureRegistryException extends RegistryException {
 
   InsecureRegistryException(URL insecureUrl) {
-    super("Only secure connections are allowed, but tried to reach URL " + insecureUrl);
+    super(
+        "Failed to verify the server at "
+            + insecureUrl
+            + " because only secure connections are allowed.");
   }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,10 +16,13 @@
 
 package com.google.cloud.tools.jib.registry;
 
-import com.google.cloud.tools.jib.Timer;
+import com.google.cloud.tools.jib.ProjectInfo;
 import com.google.cloud.tools.jib.blob.Blob;
 import com.google.cloud.tools.jib.blob.BlobDescriptor;
-import com.google.cloud.tools.jib.builder.BuildLogger;
+import com.google.cloud.tools.jib.blob.Blobs;
+import com.google.cloud.tools.jib.builder.TimerEventDispatcher;
+import com.google.cloud.tools.jib.event.EventDispatcher;
+import com.google.cloud.tools.jib.global.JibSystemProperties;
 import com.google.cloud.tools.jib.http.Authorization;
 import com.google.cloud.tools.jib.image.DescriptorDigest;
 import com.google.cloud.tools.jib.image.json.BuildableManifestTemplate;
@@ -28,63 +31,39 @@ import com.google.cloud.tools.jib.image.json.V21ManifestTemplate;
 import com.google.cloud.tools.jib.image.json.V22ManifestTemplate;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
-import com.google.common.base.Strings;
 import java.io.IOException;
-import java.io.OutputStream;
 import java.net.URL;
 import javax.annotation.Nullable;
 
 /** Interfaces with a registry. */
 public class RegistryClient {
 
-  // TODO: Remove
-  private Timer parentTimer =
-      new Timer(
-          new BuildLogger() {
-            @Override
-            public void debug(CharSequence message) {}
-
-            @Override
-            public void info(CharSequence message) {}
-
-            @Override
-            public void warn(CharSequence message) {}
-
-            @Override
-            public void error(CharSequence message) {}
-
-            @Override
-            public void lifecycle(CharSequence message) {}
-          },
-          "NULL TIMER");
-
-  public RegistryClient setTimer(Timer parentTimer) {
-    this.parentTimer = parentTimer;
-    return this;
-  }
-
   /** Factory for creating {@link RegistryClient}s. */
   public static class Factory {
 
+    private final EventDispatcher eventDispatcher;
     private final RegistryEndpointRequestProperties registryEndpointRequestProperties;
 
-    private boolean allowHttp = false;
+    private boolean allowInsecureRegistries = false;
+    @Nullable private String userAgentSuffix;
     @Nullable private Authorization authorization;
 
-    private Factory(RegistryEndpointRequestProperties registryEndpointRequestProperties) {
+    private Factory(
+        EventDispatcher eventDispatcher,
+        RegistryEndpointRequestProperties registryEndpointRequestProperties) {
+      this.eventDispatcher = eventDispatcher;
       this.registryEndpointRequestProperties = registryEndpointRequestProperties;
     }
 
     /**
-     * Sets whether or not {@code HTTP} should be allowed (credentials should not be sent when set
-     * to {@code true}). Defaults to {@code false}.
+     * Sets whether or not to allow insecure registries (ignoring certificate validation failure or
+     * communicating over HTTP if all else fail).
      *
-     * @param allowHttp if {@code true}, allows {@code HTTP} connections; otherwise, only {@code
-     *     HTTPS} connections are allowed
+     * @param allowInsecureRegistries if {@code true}, insecure connections will be allowed
      * @return this
      */
-    public Factory setAllowHttp(boolean allowHttp) {
-      this.allowHttp = allowHttp;
+    public Factory setAllowInsecureRegistries(boolean allowInsecureRegistries) {
+      this.allowInsecureRegistries = allowInsecureRegistries;
       return this;
     }
 
@@ -100,84 +79,91 @@ public class RegistryClient {
     }
 
     /**
+     * Sets a suffix to append to {@code User-Agent} headers.
+     *
+     * @param userAgentSuffix the suffix to append
+     * @return this
+     */
+    public Factory setUserAgentSuffix(@Nullable String userAgentSuffix) {
+      this.userAgentSuffix = userAgentSuffix;
+      return this;
+    }
+
+    /**
      * Creates a new {@link RegistryClient}.
      *
      * @return the new {@link RegistryClient}
      */
     public RegistryClient newRegistryClient() {
       return new RegistryClient(
-          authorization, registryEndpointRequestProperties, allowHttp, makeUserAgent());
+          eventDispatcher,
+          authorization,
+          registryEndpointRequestProperties,
+          allowInsecureRegistries,
+          makeUserAgent());
+    }
+
+    /**
+     * The {@code User-Agent} is in the form of {@code jib <version> <type>}. For example: {@code
+     * jib 0.9.0 jib-maven-plugin}.
+     *
+     * @return the {@code User-Agent} header to send. The {@code User-Agent} can be disabled by
+     *     setting the system property variable {@code _JIB_DISABLE_USER_AGENT} to any non-empty
+     *     string.
+     */
+    private String makeUserAgent() {
+      if (!JibSystemProperties.isUserAgentEnabled()) {
+        return "";
+      }
+
+      StringBuilder userAgentBuilder = new StringBuilder();
+      userAgentBuilder.append("jib");
+      userAgentBuilder.append(" ").append(ProjectInfo.VERSION);
+      if (userAgentSuffix != null) {
+        userAgentBuilder.append(" ").append(userAgentSuffix);
+      }
+      return userAgentBuilder.toString();
     }
   }
 
-  @Nullable private static String userAgentSuffix;
-
   /**
+   * Creates a new {@link Factory} for building a {@link RegistryClient}.
+   *
+   * @param eventDispatcher the event dispatcher used for dispatching log events
    * @param serverUrl the server URL for the registry (for example, {@code gcr.io})
    * @param imageName the image/repository name (also known as, namespace)
    * @return the new {@link Factory}
    */
-  public static Factory factory(String serverUrl, String imageName) {
-    return new Factory(new RegistryEndpointRequestProperties(serverUrl, imageName));
+  public static Factory factory(
+      EventDispatcher eventDispatcher, String serverUrl, String imageName) {
+    return new Factory(
+        eventDispatcher, new RegistryEndpointRequestProperties(serverUrl, imageName));
   }
 
-  // TODO: Inject via a RegistryClient.Factory.
-  /**
-   * Sets a suffix to append to {@code User-Agent} headers.
-   *
-   * @param userAgentSuffix the suffix to append
-   */
-  public static void setUserAgentSuffix(@Nullable String userAgentSuffix) {
-    RegistryClient.userAgentSuffix = userAgentSuffix;
-  }
-
-  /**
-   * The {@code User-Agent} is in the form of {@code jib <version> <type>}. For example: {@code jib
-   * 0.9.0 jib-maven-plugin}.
-   *
-   * @return the {@code User-Agent} header to send. The {@code User-Agent} can be disabled by
-   *     setting the system property variable {@code _JIB_DISABLE_USER_AGENT} to any non-empty
-   *     string.
-   */
-  @VisibleForTesting
-  static String makeUserAgent() {
-    if (!Strings.isNullOrEmpty(System.getProperty("_JIB_DISABLE_USER_AGENT"))) {
-      return "";
-    }
-
-    String version = RegistryClient.class.getPackage().getImplementationVersion();
-    StringBuilder userAgentBuilder = new StringBuilder();
-    userAgentBuilder.append("jib");
-    if (version != null) {
-      userAgentBuilder.append(" ").append(version);
-    }
-    if (userAgentSuffix != null) {
-      userAgentBuilder.append(" ").append(userAgentSuffix);
-    }
-    return userAgentBuilder.toString();
-  }
-
+  private final EventDispatcher eventDispatcher;
   @Nullable private final Authorization authorization;
   private final RegistryEndpointRequestProperties registryEndpointRequestProperties;
-  private final boolean allowHttp;
+  private final boolean allowInsecureRegistries;
   private final String userAgent;
 
   /**
    * Instantiate with {@link #factory}.
    *
+   * @param eventDispatcher the event dispatcher used for dispatching log events
    * @param authorization the {@link Authorization} to access the registry/repository
    * @param registryEndpointRequestProperties properties of registry endpoint requests
-   * @param allowHttp if {@code true}, allows redirects and fallbacks to HTTP; otherwise, only
-   *     allows HTTPS
+   * @param allowInsecureRegistries if {@code true}, insecure connections will be allowed
    */
   private RegistryClient(
+      EventDispatcher eventDispatcher,
       @Nullable Authorization authorization,
       RegistryEndpointRequestProperties registryEndpointRequestProperties,
-      boolean allowHttp,
+      boolean allowInsecureRegistries,
       String userAgent) {
+    this.eventDispatcher = eventDispatcher;
     this.authorization = authorization;
     this.registryEndpointRequestProperties = registryEndpointRequestProperties;
-    this.allowHttp = allowHttp;
+    this.allowInsecureRegistries = allowInsecureRegistries;
     this.userAgent = userAgent;
   }
 
@@ -250,54 +236,64 @@ public class RegistryClient {
   }
 
   /**
-   * Downloads the BLOB to a file.
+   * Gets the BLOB referenced by {@code blobDigest}. Note that the BLOB is only pulled when it is
+   * written out.
    *
    * @param blobDigest the digest of the BLOB to download
-   * @param destinationOutputStream the {@link OutputStream} to write the BLOB to
    * @return a {@link Blob} backed by the file at {@code destPath}. The file at {@code destPath}
    *     must exist for {@link Blob} to be valid.
-   * @throws IOException if communicating with the endpoint fails
-   * @throws RegistryException if communicating with the endpoint fails
    */
-  public Void pullBlob(DescriptorDigest blobDigest, OutputStream destinationOutputStream)
-      throws RegistryException, IOException {
-    BlobPuller blobPuller =
-        new BlobPuller(registryEndpointRequestProperties, blobDigest, destinationOutputStream);
-    return callRegistryEndpoint(blobPuller);
+  public Blob pullBlob(DescriptorDigest blobDigest) {
+    return Blobs.from(
+        outputStream -> {
+          try {
+            callRegistryEndpoint(
+                new BlobPuller(registryEndpointRequestProperties, blobDigest, outputStream));
+
+          } catch (RegistryException ex) {
+            throw new IOException(ex);
+          }
+        });
   }
 
-  // TODO: Add mount with 'from' parameter
   /**
-   * Pushes the BLOB, or skips if the BLOB already exists on the registry.
+   * Pushes the BLOB. If the {@code sourceRepository} is provided then the remote registry may skip
+   * if the BLOB already exists on the registry.
    *
    * @param blobDigest the digest of the BLOB, used for existence-check
    * @param blob the BLOB to push
+   * @param sourceRepository if pushing to the same registry then the source image, or {@code null}
+   *     otherwise; used to optimize the BLOB push
    * @return {@code true} if the BLOB already exists on the registry and pushing was skipped; false
    *     if the BLOB was pushed
    * @throws IOException if communicating with the endpoint fails
    * @throws RegistryException if communicating with the endpoint fails
    */
-  public boolean pushBlob(DescriptorDigest blobDigest, Blob blob)
+  public boolean pushBlob(DescriptorDigest blobDigest, Blob blob, @Nullable String sourceRepository)
       throws IOException, RegistryException {
-    BlobPusher blobPusher = new BlobPusher(registryEndpointRequestProperties, blobDigest, blob);
+    BlobPusher blobPusher =
+        new BlobPusher(registryEndpointRequestProperties, blobDigest, blob, sourceRepository);
 
-    try (Timer t = parentTimer.subTimer("pushBlob")) {
-      try (Timer t2 = t.subTimer("pushBlob POST " + blobDigest)) {
+    try (TimerEventDispatcher timerEventDispatcher =
+        new TimerEventDispatcher(eventDispatcher, "pushBlob")) {
+      try (TimerEventDispatcher timerEventDispatcher2 =
+          timerEventDispatcher.subTimer("pushBlob POST " + blobDigest)) {
 
-        // POST /v2/<name>/blobs/uploads/?mount={blob.digest}
+        // POST /v2/<name>/blobs/uploads/ OR
+        // POST /v2/<name>/blobs/uploads/?mount={blob.digest}&from={sourceRepository}
         URL patchLocation = callRegistryEndpoint(blobPusher.initializer());
         if (patchLocation == null) {
           // The BLOB exists already.
           return true;
         }
 
-        t2.lap("pushBlob PATCH " + blobDigest);
+        timerEventDispatcher2.lap("pushBlob PATCH " + blobDigest);
 
         // PATCH <Location> with BLOB
         URL putLocation = callRegistryEndpoint(blobPusher.writer(patchLocation));
         Preconditions.checkNotNull(putLocation);
 
-        t2.lap("pushBlob PUT " + blobDigest);
+        timerEventDispatcher2.lap("pushBlob PUT " + blobDigest);
 
         // PUT <Location>?digest={blob.digest}
         callRegistryEndpoint(blobPusher.committer(putLocation));
@@ -329,12 +325,13 @@ public class RegistryClient {
   private <T> T callRegistryEndpoint(RegistryEndpointProvider<T> registryEndpointProvider)
       throws IOException, RegistryException {
     return new RegistryEndpointCaller<>(
+            eventDispatcher,
             userAgent,
             getApiRouteBase(),
             registryEndpointProvider,
             authorization,
             registryEndpointRequestProperties,
-            allowHttp)
+            allowInsecureRegistries)
         .call();
   }
 }

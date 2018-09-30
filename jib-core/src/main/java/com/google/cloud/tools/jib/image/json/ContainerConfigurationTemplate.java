@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Google LLC. All rights reserved.
+ * Copyright 2017 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -38,9 +38,23 @@ import javax.annotation.Nullable;
  *   "config": {
  *     "Env": ["/usr/bin/java"],
  *     "Entrypoint": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
- *     "Cmd": ["arg1", "arg2"]
- *     "ExposedPorts": { "6000/tcp":{}, "8000/tcp":{}, "9000/tcp":{} }
+ *     "Cmd": ["arg1", "arg2"],
+ *     "ExposedPorts": { "6000/tcp":{}, "8000/tcp":{}, "9000/tcp":{} },
+ *     "Labels": { "com.example.label": "value" },
+ *     "WorkingDir": "/home/user/workspace"
  *   },
+ *   "history": [
+ *     {
+ *       "author": "Jib",
+ *       "created": "1970-01-01T00:00:00Z",
+ *       "created_by": "jib"
+ *     },
+ *     {
+ *       "author": "Jib",
+ *       "created": "1970-01-01T00:00:00Z",
+ *       "created_by": "jib"
+ *     }
+ *   ]
  *   "rootfs": {
  *     "diff_ids": [
  *       "sha256:2aebd096e0e237b447781353379722157e6c2d434b9ec5a0d63f2a6f07cf90c2",
@@ -69,6 +83,9 @@ public class ContainerConfigurationTemplate implements JsonTemplate {
   /** Execution parameters that should be used as a base when running the container. */
   private final ConfigurationObjectTemplate config = new ConfigurationObjectTemplate();
 
+  /** Describes the history of each layer. */
+  private final List<HistoryEntry> history = new ArrayList<>();
+
   /** Layer content digests that are used to build the container filesystem. */
   private final RootFilesystemObjectTemplate rootfs = new RootFilesystemObjectTemplate();
 
@@ -87,6 +104,12 @@ public class ContainerConfigurationTemplate implements JsonTemplate {
 
     /** Network ports the container exposes. */
     @Nullable private Map<String, Map<?, ?>> ExposedPorts;
+
+    /** Labels. */
+    @Nullable private Map<String, String> Labels;
+
+    /** Working directory. */
+    @Nullable private String WorkingDir;
   }
 
   /**
@@ -109,28 +132,44 @@ public class ContainerConfigurationTemplate implements JsonTemplate {
     this.created = created;
   }
 
-  public void setContainerEnvironment(List<String> environment) {
+  public void setContainerEnvironment(@Nullable List<String> environment) {
     config.Env = environment;
   }
 
-  public void setContainerEntrypoint(List<String> command) {
+  public void setContainerEntrypoint(@Nullable List<String> command) {
     config.Entrypoint = command;
   }
 
-  public void setContainerCmd(List<String> cmd) {
+  public void setContainerCmd(@Nullable List<String> cmd) {
     config.Cmd = cmd;
   }
 
-  public void setContainerExposedPorts(Map<String, Map<?, ?>> exposedPorts) {
+  public void setContainerExposedPorts(@Nullable Map<String, Map<?, ?>> exposedPorts) {
     config.ExposedPorts = exposedPorts;
+  }
+
+  public void setContainerLabels(@Nullable Map<String, String> labels) {
+    config.Labels = labels;
+  }
+
+  public void setContainerWorkingDir(@Nullable String workingDirectory) {
+    config.WorkingDir = workingDirectory;
   }
 
   public void addLayerDiffId(DescriptorDigest diffId) {
     rootfs.diff_ids.add(diffId);
   }
 
+  public void addHistoryEntry(HistoryEntry historyEntry) {
+    history.add(historyEntry);
+  }
+
   List<DescriptorDigest> getDiffIds() {
     return rootfs.diff_ids;
+  }
+
+  List<HistoryEntry> getHistory() {
+    return history;
   }
 
   @Nullable
@@ -156,6 +195,16 @@ public class ContainerConfigurationTemplate implements JsonTemplate {
   @Nullable
   Map<String, Map<?, ?>> getContainerExposedPorts() {
     return config.ExposedPorts;
+  }
+
+  @Nullable
+  Map<String, String> getContainerLabels() {
+    return config.Labels;
+  }
+
+  @Nullable
+  String getContainerWorkingDir() {
+    return config.WorkingDir;
   }
 
   @VisibleForTesting

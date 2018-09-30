@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -18,7 +18,8 @@ package com.google.cloud.tools.jib.image;
 
 import com.google.cloud.tools.jib.blob.Blob;
 import com.google.cloud.tools.jib.blob.Blobs;
-import com.google.cloud.tools.jib.filesystem.DirectoryWalker;
+import com.google.cloud.tools.jib.configuration.LayerConfiguration;
+import com.google.cloud.tools.jib.filesystem.AbsoluteUnixPath;
 import com.google.common.collect.ImmutableList;
 import com.google.common.io.CharStreams;
 import com.google.common.io.Resources;
@@ -33,8 +34,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.FileTime;
-import java.util.Arrays;
-import java.util.Collections;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.hamcrest.CoreMatchers;
@@ -72,6 +71,23 @@ public class ReproducibleLayerBuilderTest {
     Assert.assertEquals(expectedString, extractedString);
   }
 
+  /**
+   * Verifies that the next {@link TarArchiveEntry} in the {@link TarArchiveInputStream} is a
+   * directory with correct permissions.
+   *
+   * @param tarArchiveInputStream the {@link TarArchiveInputStream} to read from
+   * @param expectedExtractionPath the expected extraction path of the next entry
+   * @throws IOException if an I/O exception occurs
+   */
+  private static void verifyNextTarArchiveEntryIsDirectory(
+      TarArchiveInputStream tarArchiveInputStream, String expectedExtractionPath)
+      throws IOException {
+    TarArchiveEntry extractionPathEntry = tarArchiveInputStream.getNextTarEntry();
+    Assert.assertEquals(expectedExtractionPath, extractionPathEntry.getName());
+    Assert.assertTrue(extractionPathEntry.isDirectory());
+    Assert.assertEquals(TarArchiveEntry.DEFAULT_DIR_MODE, extractionPathEntry.getMode());
+  }
+
   @Rule public TemporaryFolder temporaryFolder = new TemporaryFolder();
 
   @Test
@@ -80,52 +96,47 @@ public class ReproducibleLayerBuilderTest {
     Path blobA = Paths.get(Resources.getResource("blobA").toURI());
 
     ReproducibleLayerBuilder layerBuilder =
-        new ReproducibleLayerBuilder()
-            .addFiles(Arrays.asList(layerDirectory, blobA), "extract/here/apple")
-            .addFiles(Collections.singletonList(blobA), "extract/here/banana");
+        new ReproducibleLayerBuilder(
+            LayerConfiguration.builder()
+                .addEntryRecursive(
+                    layerDirectory, AbsoluteUnixPath.get("/extract/here/apple/layer"))
+                .addEntry(blobA, AbsoluteUnixPath.get("/extract/here/apple/blobA"))
+                .addEntry(blobA, AbsoluteUnixPath.get("/extract/here/banana/blobA"))
+                .build()
+                .getLayerEntries());
 
     // Writes the layer tar to a temporary file.
-    UnwrittenLayer unwrittenLayer = layerBuilder.build();
+    Blob unwrittenBlob = layerBuilder.build();
     Path temporaryFile = temporaryFolder.newFile().toPath();
     try (OutputStream temporaryFileOutputStream =
         new BufferedOutputStream(Files.newOutputStream(temporaryFile))) {
-      unwrittenLayer.getBlob().writeTo(temporaryFileOutputStream);
+      unwrittenBlob.writeTo(temporaryFileOutputStream);
     }
 
     // Reads the file back.
     try (TarArchiveInputStream tarArchiveInputStream =
         new TarArchiveInputStream(Files.newInputStream(temporaryFile))) {
-      // Verifies that blobA was added.
+      verifyNextTarArchiveEntryIsDirectory(tarArchiveInputStream, "extract/");
+      verifyNextTarArchiveEntryIsDirectory(tarArchiveInputStream, "extract/here/");
+      verifyNextTarArchiveEntryIsDirectory(tarArchiveInputStream, "extract/here/apple/");
       verifyNextTarArchiveEntry(tarArchiveInputStream, "extract/here/apple/blobA", blobA);
-
-      // Verifies that all the files have been added to the tarball stream.
-      ImmutableList<Path> layerDirectoryPaths =
-          new DirectoryWalker(layerDirectory).filter(path -> !path.equals(layerDirectory)).walk();
-      for (Path path : layerDirectoryPaths) {
-        TarArchiveEntry header = tarArchiveInputStream.getNextTarEntry();
-
-        StringBuilder expectedExtractionPath = new StringBuilder("extract/here/apple");
-        for (Path pathComponent : layerDirectory.getParent().relativize(path)) {
-          expectedExtractionPath.append("/").append(pathComponent);
-        }
-        // Check path-equality because there might be an appended backslash in the header
-        // filename.
-        Assert.assertEquals(
-            Paths.get(expectedExtractionPath.toString()), Paths.get(header.getName()));
-
-        // If is a normal file, checks that the file contents match.
-        if (Files.isRegularFile(path)) {
-          String expectedFileString = new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
-
-          String extractedFileString =
-              CharStreams.toString(
-                  new InputStreamReader(tarArchiveInputStream, StandardCharsets.UTF_8));
-
-          Assert.assertEquals(expectedFileString, extractedFileString);
-        }
-      }
-
-      // Verifies that blobA was added to the other location.
+      verifyNextTarArchiveEntryIsDirectory(tarArchiveInputStream, "extract/here/apple/layer/");
+      verifyNextTarArchiveEntryIsDirectory(tarArchiveInputStream, "extract/here/apple/layer/a/");
+      verifyNextTarArchiveEntryIsDirectory(tarArchiveInputStream, "extract/here/apple/layer/a/b/");
+      verifyNextTarArchiveEntry(
+          tarArchiveInputStream,
+          "extract/here/apple/layer/a/b/bar",
+          Paths.get(Resources.getResource("layer/a/b/bar").toURI()));
+      verifyNextTarArchiveEntryIsDirectory(tarArchiveInputStream, "extract/here/apple/layer/c/");
+      verifyNextTarArchiveEntry(
+          tarArchiveInputStream,
+          "extract/here/apple/layer/c/cat",
+          Paths.get(Resources.getResource("layer/c/cat").toURI()));
+      verifyNextTarArchiveEntry(
+          tarArchiveInputStream,
+          "extract/here/apple/layer/foo",
+          Paths.get(Resources.getResource("layer/foo").toURI()));
+      verifyNextTarArchiveEntryIsDirectory(tarArchiveInputStream, "extract/here/banana/");
       verifyNextTarArchiveEntry(tarArchiveInputStream, "extract/here/banana/blobA", blobA);
     }
   }
@@ -135,8 +146,6 @@ public class ReproducibleLayerBuilderTest {
     Path testRoot = temporaryFolder.getRoot().toPath();
     Path root1 = Files.createDirectories(testRoot.resolve("files1"));
     Path root2 = Files.createDirectories(testRoot.resolve("files2"));
-
-    String extractionPath = "/somewhere";
 
     // TODO: Currently this test only covers variation in order and modified time, even though
     // TODO: the code is designed to clean up userid/groupid, this test does not check that yet.
@@ -153,15 +162,17 @@ public class ReproducibleLayerBuilderTest {
 
     // create layers of exact same content but ordered differently and with different timestamps
     Blob layer =
-        new ReproducibleLayerBuilder()
-            .addFiles(Arrays.asList(fileA1, fileB1), extractionPath)
-            .build()
-            .getBlob();
+        new ReproducibleLayerBuilder(
+                ImmutableList.of(
+                    new LayerEntry(fileA1, AbsoluteUnixPath.get("/somewhere/fileA")),
+                    new LayerEntry(fileB1, AbsoluteUnixPath.get("/somewhere/fileB"))))
+            .build();
     Blob reproduced =
-        new ReproducibleLayerBuilder()
-            .addFiles(Arrays.asList(fileB2, fileA2), extractionPath)
-            .build()
-            .getBlob();
+        new ReproducibleLayerBuilder(
+                ImmutableList.of(
+                    new LayerEntry(fileB2, AbsoluteUnixPath.get("/somewhere/fileB")),
+                    new LayerEntry(fileA2, AbsoluteUnixPath.get("/somewhere/fileA"))))
+            .build();
 
     byte[] layerContent = Blobs.writeToByteArray(layer);
     byte[] reproducedLayerContent = Blobs.writeToByteArray(reproduced);

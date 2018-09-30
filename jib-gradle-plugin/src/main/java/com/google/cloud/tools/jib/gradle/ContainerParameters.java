@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,11 +16,13 @@
 
 package com.google.cloud.tools.jib.gradle;
 
+import com.google.cloud.tools.jib.frontend.JavaLayerConfigurations;
 import com.google.cloud.tools.jib.image.ImageFormat;
 import com.google.cloud.tools.jib.image.json.BuildableManifestTemplate;
 import com.google.common.base.Preconditions;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import javax.annotation.Nullable;
 import org.gradle.api.tasks.Input;
 import org.gradle.api.tasks.Optional;
@@ -33,10 +35,14 @@ public class ContainerParameters {
 
   private boolean useCurrentTimestamp = false;
   private List<String> jvmFlags = Collections.emptyList();
+  private Map<String, String> environment = Collections.emptyMap();
+  private List<String> entrypoint = Collections.emptyList();
   @Nullable private String mainClass;
   private List<String> args = Collections.emptyList();
   private ImageFormat format = ImageFormat.Docker;
   private List<String> ports = Collections.emptyList();
+  private Map<String, String> labels = Collections.emptyMap();
+  private String appRoot = JavaLayerConfigurations.DEFAULT_APP_ROOT;
 
   @Input
   @Optional
@@ -50,12 +56,32 @@ public class ContainerParameters {
 
   @Input
   @Optional
+  public List<String> getEntrypoint() {
+    return entrypoint;
+  }
+
+  public void setEntrypoint(List<String> entrypoint) {
+    this.entrypoint = entrypoint;
+  }
+
+  @Input
+  @Optional
   public List<String> getJvmFlags() {
     return jvmFlags;
   }
 
   public void setJvmFlags(List<String> jvmFlags) {
     this.jvmFlags = jvmFlags;
+  }
+
+  @Input
+  @Optional
+  public Map<String, String> getEnvironment() {
+    return environment;
+  }
+
+  public void setEnvironment(Map<String, String> environment) {
+    this.environment = environment;
   }
 
   @Input
@@ -97,5 +123,25 @@ public class ContainerParameters {
 
   public void setPorts(List<String> ports) {
     this.ports = ports;
+  }
+
+  @Input
+  @Optional
+  public Map<String, String> getLabels() {
+    return labels;
+  }
+
+  public void setLabels(Map<String, String> labels) {
+    this.labels = labels;
+  }
+
+  @Input
+  @Optional
+  public String getAppRoot() {
+    return appRoot;
+  }
+
+  public void setAppRoot(String appRoot) {
+    this.appRoot = appRoot;
   }
 }

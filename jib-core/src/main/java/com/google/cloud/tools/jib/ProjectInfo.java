@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -24,6 +24,9 @@ public class ProjectInfo {
 
   /** Link to file an issue against the GitHub repository. */
   public static final String GITHUB_NEW_ISSUE_URL = GITHUB_URL + "/issues/new";
+
+  /** The project version. */
+  public static final String VERSION = ProjectInfo.class.getPackage().getImplementationVersion();
 
   private ProjectInfo() {}
 }

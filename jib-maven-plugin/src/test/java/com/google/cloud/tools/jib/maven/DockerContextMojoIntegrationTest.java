@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -38,6 +38,9 @@ public class DockerContextMojoIntegrationTest {
   @ClassRule
   public static final TestProject simpleTestProject = new TestProject(testPlugin, "simple");
 
+  @ClassRule
+  public static final TestProject skippedTestProject = new TestProject(testPlugin, "empty");
+
   @Test
   public void testExecute() throws VerificationException, IOException, InterruptedException {
     Verifier verifier = new Verifier(simpleTestProject.getProjectRoot().toString());
@@ -49,10 +52,11 @@ public class DockerContextMojoIntegrationTest {
         simpleTestProject.getProjectRoot().resolve("target").resolve("jib-docker-context");
     Assert.assertTrue(Files.exists(dockerContextDirectory));
 
-    String imageName = "jib/integration-test";
+    String imageName = "jib/integration-test" + System.nanoTime();
     new Command("docker", "build", "-t", imageName, dockerContextDirectory.toString()).run();
+    String dockerInspect = new Command("docker", "inspect", imageName).run();
     Assert.assertThat(
-        new Command("docker", "inspect", imageName).run(),
+        dockerInspect,
         CoreMatchers.containsString(
             "            \"ExposedPorts\": {\n"
                 + "                \"1000/tcp\": {},\n"
@@ -60,8 +64,20 @@ public class DockerContextMojoIntegrationTest {
                 + "                \"2001/udp\": {},\n"
                 + "                \"2002/udp\": {},\n"
                 + "                \"2003/udp\": {}"));
+    Assert.assertThat(
+        dockerInspect,
+        CoreMatchers.containsString(
+            "            \"Labels\": {\n"
+                + "                \"key1\": \"value1\",\n"
+                + "                \"key2\": \"value2\"\n"
+                + "            }"));
 
     Assert.assertEquals(
-        "Hello, world. An argument.\n", new Command("docker", "run", imageName).run());
+        "Hello, world. An argument.\nfoo\ncat\n",
+        new Command("docker", "run", "--rm", imageName).run());
+  }
+
+  public void testExecute_skipJibGoal() throws VerificationException, IOException {
+    SkippedGoalVerifier.verifyGoalIsSkipped(skippedTestProject, BuildDockerMojo.GOAL_NAME);
   }
 }

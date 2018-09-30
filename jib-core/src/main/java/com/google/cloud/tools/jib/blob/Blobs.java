@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Google LLC. All rights reserved.
+ * Copyright 2017 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,9 +16,11 @@
 
 package com.google.cloud.tools.jib.blob;
 
+import com.google.cloud.tools.jib.filesystem.FileOperations;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 
@@ -33,6 +35,12 @@ public class Blobs {
     return new FileBlob(file);
   }
 
+  /**
+   * Creates a {@link StringBlob} with UTF-8 encoding.
+   *
+   * @param content the string to create the blob from
+   * @return the {@link StringBlob}
+   */
   public static Blob from(String content) {
     return new StringBlob(content);
   }
@@ -42,7 +50,7 @@ public class Blobs {
   }
 
   /**
-   * Writes the BLOB to a string.
+   * Writes the BLOB to a string with UTF-8 decoding.
    *
    * @param blob the BLOB to write
    * @return the BLOB contents as a string
@@ -63,6 +71,20 @@ public class Blobs {
     ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
     blob.writeTo(byteArrayOutputStream);
     return byteArrayOutputStream.toByteArray();
+  }
+
+  /**
+   * Writes the BLOB to a file with an exclusive lock.
+   *
+   * @param blob the BLOB to to write
+   * @param blobFile the file to write to
+   * @return the {@link BlobDescriptor} of the written BLOB
+   * @throws IOException if writing the BLOB fails
+   */
+  public static BlobDescriptor writeToFileWithLock(Blob blob, Path blobFile) throws IOException {
+    try (OutputStream outputStream = FileOperations.newLockingOutputStream(blobFile)) {
+      return blob.writeTo(outputStream);
+    }
   }
 
   private Blobs() {}

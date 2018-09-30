@@ -1,11 +1,10 @@
-[![experimental](http://badges.github.io/stability-badges/dist/experimental.svg)](http://github.com/badges/stability-badges)
-[![Analytics](https://cloud-tools-for-java-metrics.appspot.com/UA-121724379-2/jib-gradle-plugin)](https://github.com/igrigorik/ga-beacon)
-[![Gradle Plugin Portal](https://img.shields.io/badge/gradle%20plugin-v0.9.6-blue.svg)](https://plugins.gradle.org/plugin/com.google.cloud.tools.jib)
+![beta](https://img.shields.io/badge/stability-beta-darkorange.svg)
+[![Gradle Plugin Portal](https://img.shields.io/maven-metadata/v/https/plugins.gradle.org/m2/com/google/cloud/tools/jib/com.google.cloud.tools.jib.gradle.plugin/maven-metadata.xml.svg?colorB=007ec6&label=gradle)](https://plugins.gradle.org/plugin/com.google.cloud.tools.jib)
 [![Gitter version](https://img.shields.io/gitter/room/gitterHQ/gitter.svg)](https://gitter.im/google/jib)
 
 # Jib - Containerize your Gradle Java project
 
-Jib is [Gradle](https://gradle.org/) plugin for building Docker and [OCI](https://github.com/opencontainers/image-spec) images for your Java applications.
+Jib is a [Gradle](https://gradle.org/) plugin for building Docker and [OCI](https://github.com/opencontainers/image-spec) images for your Java applications.
 
 For information about the project, see the [Jib project README](../README.md).
 For the Maven plugin, see the [jib-maven-plugin project](../jib-maven-plugin).
@@ -24,7 +23,7 @@ In your Gradle Java project, add the plugin to your `build.gradle`:
 
 ```groovy
 plugins {
-  id 'com.google.cloud.tools.jib' version '0.9.6'
+  id 'com.google.cloud.tools.jib' version '0.9.11'
 }
 ```
 
@@ -90,7 +89,7 @@ Build your container image with:
 gradle jib
 ```
 
-Subsequent builds are much faster than the initial build. 
+Subsequent builds are much faster than the initial build.
 
 *Having trouble? Let us know by [submitting an issue](/../../issues/new), contacting us on [Gitter](https://gitter.im/google/jib), or posting to the [Jib users forum](https://groups.google.com/forum/#!forum/jib-users).*
 
@@ -107,6 +106,20 @@ If you are using [`minikube`](https://github.com/kubernetes/minikube)'s remote D
 ```shell
 eval $(minikube docker-env)
 gradle jibDockerBuild
+```
+
+#### Build an image tarball
+
+You can build and save your image to disk as a tarball with:
+
+```shell
+gradle jibBuildTar
+```
+
+This builds and saves your image to `build/jib-image.tar`, which you can load into docker with:
+
+```shell
+docker load --input build/jib-image.tar
 ```
 
 ### Run `jib` with each build
@@ -127,17 +140,17 @@ Jib can also export a Docker context so that you can build with Docker, if neede
 gradle jibExportDockerContext
 ```
 
-The Docker context will be created at `build/jib-docker-context` by default. You can change this directory with the `targetDir` configuration option or the `---jib.dockerDir` parameter:
+The Docker context will be created at `build/jib-docker-context` by default. You can change this directory with the `targetDir` configuration option or the `--jibTargetDir` parameter:
 
 ```shell
-gradle jibExportDockerContext --jib.dockerDir=my/docker/context/
+gradle jibExportDockerContext --jibTargetDir=my/docker/context/
 ```
 
 You can then build your image with Docker:
 
 ```shell
 docker build -t myimage my/docker/context/
-``` 
+```
 
 ## Extended Usage
 
@@ -145,27 +158,28 @@ The plugin provides the `jib` extension for configuration with the following opt
 
 Field | Type | Default | Description
 --- | --- | --- | ---
-`from` | [`from`](#from-closure) | See [`from`](#from-closure) | Configures the base image to build your application on top of.
 `to` | [`to`](#to-closure) | *Required* | Configures the target image to build your application to.
+`from` | [`from`](#from-closure) | See [`from`](#from-closure) | Configures the base image to build your application on top of.
 `container` | [`container`](#container-closure) | See [`container`](#container-closure) | Configures the container that is run from your built image.
-`useProjectOnlyCache` | `boolean` | `false` | If set to true, Jib does not share a cache between different Maven projects.
-`allowInsecureRegistries` | boolean | `false` | If set to true, Jib uses HTTP as a fallback for registries that do not support HTTPS. Leaving this parameter set to false is strongly recommended, since communication with insecure registries is unencrypted and visible to others on the network.
+`allowInsecureRegistries` | `boolean` | `false` | If set to true, Jib ignores HTTPS certificate errors and may fall back to HTTP as a last resort. Leaving this parameter set to `false` is strongly recommended, since HTTP communication is unencrypted and visible to others on the network, and insecure HTTPS is no better than plain HTTP. [If accessing a registry with a self-signed certificate, adding the certificate to your Java runtime's trusted keys](https://github.com/GoogleContainerTools/jib/tree/master/docs/self_sign_cert.md) may be an alternative to enabling this option.
+`useProjectOnlyCache` | `boolean` | `false` | If set to `true`, Jib does not share a cache between different Maven projects.
 
 <a name="from-closure"></a>`from` is a closure with the following properties:
 
 Property | Type | Default | Description
 --- | --- | --- | ---
 `image` | `String` | `gcr.io/distroless/java` | The image reference for the base image.
-`credHelper` | `String` | *None* | Suffix for the credential helper that can authenticate pulling the base image (following `docker-credential-`).
 `auth` | [`auth`](#auth-closure) | *None* | Specify credentials directly (alternative to `credHelper`).
+`credHelper` | `String` | *None* | Suffix for the credential helper that can authenticate pulling the base image (following `docker-credential-`).
 
 <a name="to-closure"></a>`to` is a closure with the following properties:
 
 Property | Type | Default | Description
 --- | --- | --- | ---
 `image` | `String` | *Required* | The image reference for the target image. This can also be specified via the `--image` command line option.
-`credHelper` | `String` | *None* | Suffix for the credential helper that can authenticate pulling the base image (following `docker-credential-`).
 `auth` | [`auth`](#auth-closure) | *None* | Specify credentials directly (alternative to `credHelper`).
+`credHelper` | `String` | *None* | Suffix for the credential helper that can authenticate pulling the base image (following `docker-credential-`).
+`tags` | `List<String>` | *None* | Additional tags to push to.
 
 <a name="auth-closure"></a>`auth` is a closure with the following properties (see [Using Specific Credentials](#using-specific-credentials)):
 
@@ -178,11 +192,22 @@ Property | Type
 
 Property | Type | Default | Description
 --- | --- | --- | ---
-`jvmFlags` | `List<String>` | *None* | Additional flags to pass into the JVM when running your application.
-`mainClass` | `String` | *Inferred\** | The main class to launch your application from.
+`appRoot` | `String` | `/app` | The root directory on the container where the app's contents are placed. 
 `args` | `List<String>` | *None* | Default main method arguments to run your application with.
-`ports` | `List<String>` | *None* | Ports that the container exposes at runtime (similar to Docker's [EXPOSE](https://docs.docker.com/engine/reference/builder/#expose) instruction).
+`entrypoint` | `List<String>` | *None* | The command to start the container with (similar to Docker's [ENTRYPOINT](https://docs.docker.com/engine/reference/builder/#entrypoint) instruction). If set, then `jvmFlags` and `mainClass` are ignored.
+`environment` | `Map<String, String>` | *None* | Key-value pairs for setting environment variables on the container (similar to Docker's [ENV](https://docs.docker.com/engine/reference/builder/#env) instruction).
 `format` | `String` | `Docker` | Use `OCI` to build an [OCI container image](https://www.opencontainers.org/).
+`jvmFlags` | `List<String>` | *None* | Additional flags to pass into the JVM when running your application.
+`labels` | `Map<String, String>` | *None* | Key-value pairs for applying image metadata (similar to Docker's [LABEL](https://docs.docker.com/engine/reference/builder/#label) instruction).
+`mainClass` | `String` | *Inferred\** | The main class to launch your application from.
+`ports` | `List<String>` | *None* | Ports that the container exposes at runtime (similar to Docker's [EXPOSE](https://docs.docker.com/engine/reference/builder/#expose) instruction).
+`useCurrentTimestamp` | `boolean` | `false` | By default, Jib wipes all timestamps to guarantee reproducibility. If this parameter is set to `true`, Jib will set the image's creation timestamp to the time of the build, which sacrifices reproducibility for easily being able to tell when your image was created.
+
+You can also configure HTTP connection/read timeouts for registry interactions using the `jib.httpTimeout` system property, configured in milliseconds via commandline (the default is `20000`; you can also set it to `0` for infinite timeout):
+
+```shell
+gradle jib -Djib.httpTimeout=3000
+```
 
 *\* Uses the main class defined in the `jar` task or tries to find a valid main class.*
 
@@ -190,9 +215,10 @@ Property | Type | Default | Description
 
 In this configuration, the image:
 * Is built from a base of `openjdk:alpine` (pulled from Docker Hub)
-* Is pushed to `localhost:5000/my-image:built-with-jib`
+* Is pushed to `localhost:5000/my-image:built-with-jib`, `localhost:5000/my-image:tag2`, and `localhost:5000/my-image:latest`
 * Runs by calling `java -Xms512m -Xdebug -Xmy:flag=jib-rules -cp app/libs/*:app/resources:app/classes mypackage.MyApp some args`
 * Exposes port 1000 for tcp (default), and ports 2000, 2001, 2002, and 2003 for udp
+* Has two labels (key1:value1 and key2:value2)
 * Is built as OCI format
 
 ```groovy
@@ -203,14 +229,33 @@ jib {
   to {
     image = 'localhost:5000/my-image/built-with-jib'
     credHelper = 'osxkeychain'
+    tags = ['tag2', 'latest']
   }
   container {
     jvmFlags = ['-Xms512m', '-Xdebug', '-Xmy:flag=jib-rules']
     mainClass = 'mypackage.MyApp'
     args = ['some', 'args']
     ports = ['1000', '2000-2003/udp']
+    labels = [key1:'value1', key2:'value2']
     format = 'OCI'
   }
+}
+```
+
+### Adding Arbitrary Files to the Image
+
+*\* Note: this is an incubating feature and may change in the future.*
+
+You can add arbitrary, non-classpath files to the image by placing them in a `src/main/jib` directory. This will copy all files within the `jib` folder to the image's root directory, maintaining the same structure (e.g. if you have a text file at `src/main/jib/dir/hello.txt`, then your image will contain `/dir/hello.txt` after being built with Jib).
+
+You can configure a different directory by using the `extraDirectory` parameter in your `build.gradle`:
+
+```groovy
+jib {
+  ...
+  // Copies files from 'src/main/custom-extra-dir' instead of 'src/main/jib'
+  extraDirectory = file('src/main/custom-extra-dir')
+  ...
 }
 ```
 
@@ -232,7 +277,7 @@ Some common credential helpers include:
 
 Configure credential helpers to use by specifying them as a `credHelper` for their respective image in the `jib` extension.
 
-*Example configuration:* 
+*Example configuration:*
 ```groovy
 jib {
   from {
@@ -269,7 +314,7 @@ jib {
 }
 ```
 
-These credentials can be stored in `gradle.properties`, retrieved from a command (like `gcloud auth print-access-token`), or read in from a file. 
+These credentials can be stored in `gradle.properties`, retrieved from a command (like `gcloud auth print-access-token`), or read in from a file.
 
 For example, you can use a key file for authentication (for GCR, see [Using a JSON key file](https://cloud.google.com/container-registry/docs/advanced-authentication#using_a_json_key_file)):
 
@@ -291,8 +336,10 @@ See the [Jib project README](/../../#how-jib-works).
 
 ## Frequently Asked Questions (FAQ)
 
-See the [Jib project README](/../../#frequently-asked-questions-faq).
+See the [Jib project FAQ](../docs/faq.md).
 
 ## Community
 
 See the [Jib project README](/../../#community).
+
+[![Analytics](https://cloud-tools-for-java-metrics.appspot.com/UA-121724379-2/jib-gradle-plugin)](https://github.com/igrigorik/ga-beacon)

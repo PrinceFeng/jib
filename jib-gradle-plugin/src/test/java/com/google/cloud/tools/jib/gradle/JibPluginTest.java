@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,10 +16,19 @@
 
 package com.google.cloud.tools.jib.gradle;
 
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Collections;
+import java.util.stream.Collectors;
+import org.gradle.api.Project;
+import org.gradle.api.Task;
+import org.gradle.api.internal.project.ProjectInternal;
+import org.gradle.testfixtures.ProjectBuilder;
 import org.gradle.testkit.runner.GradleRunner;
 import org.gradle.testkit.runner.UnexpectedBuildFailure;
 import org.junit.Assert;
@@ -30,6 +39,12 @@ import org.junit.rules.TemporaryFolder;
 /** Tests for {@link JibPlugin}. */
 public class JibPluginTest {
 
+  private static final ImmutableList<String> KNOWN_JIB_TASKS =
+      ImmutableList.of(
+          JibPlugin.BUILD_IMAGE_TASK_NAME,
+          JibPlugin.BUILD_DOCKER_TASK_NAME,
+          JibPlugin.DOCKER_CONTEXT_TASK_NAME,
+          JibPlugin.BUILD_TAR_TASK_NAME);
   @Rule public TemporaryFolder testProjectRoot = new TemporaryFolder();
 
   @Test
@@ -67,5 +82,70 @@ public class JibPluginTest {
                       + JibPlugin.GRADLE_MIN_VERSION.getVersion()
                       + "'."));
     }
+  }
+
+  @Test
+  public void testProjectDependencyAssembleTasksAreRun() {
+    // root project is our jib packaged service
+    Project rootProject =
+        ProjectBuilder.builder().withProjectDir(testProjectRoot.getRoot()).withName("root").build();
+    rootProject.getPluginManager().apply("java");
+
+    // our service DOES depend on this, and jib should trigger an assemble from this project
+    Project subProject =
+        ProjectBuilder.builder()
+            .withParent(rootProject)
+            .withProjectDir(testProjectRoot.getRoot())
+            .withName("sub")
+            .build();
+    subProject.getPluginManager().apply("java");
+
+    // our service doesn't depend on this, and jib should NOT trigger an assemble from this project
+    Project unrelatedSubProject =
+        ProjectBuilder.builder()
+            .withParent(rootProject)
+            .withProjectDir(testProjectRoot.getRoot())
+            .withName("unrelated")
+            .build();
+    unrelatedSubProject.getPluginManager().apply("java");
+
+    // equivalent of "compile project(':sub')" on the root(jib) project
+    rootProject
+        .getConfigurations()
+        .getByName("compile")
+        .getDependencies()
+        .add(rootProject.getDependencies().project(ImmutableMap.of("path", subProject.getPath())));
+
+    // programmatic check
+    Assert.assertEquals(
+        Collections.singletonList(":sub"),
+        JibPlugin.getProjectDependencies(rootProject)
+            .stream()
+            .map(Project::getPath)
+            .collect(Collectors.toList()));
+
+    // check by applying the jib plugin and inspect the task dependencies
+    rootProject.getPluginManager().apply("com.google.cloud.tools.jib");
+
+    // add a custom task that our jib tasks depend on to ensure we do not overwrite this dependsOn
+    Task dependencyTask = rootProject.getTasks().create("myCustomTask", task -> {});
+    KNOWN_JIB_TASKS.forEach(
+        taskName -> rootProject.getTasks().getByPath(taskName).dependsOn(dependencyTask));
+
+    ((ProjectInternal) rootProject).evaluate();
+
+    KNOWN_JIB_TASKS.forEach(
+        taskName -> {
+          Assert.assertEquals(
+              ImmutableSet.of(":sub:assemble", ":classes", ":myCustomTask"),
+              rootProject
+                  .getTasks()
+                  .getByPath(taskName)
+                  .getDependsOn()
+                  .stream()
+                  .map(Task.class::cast)
+                  .map(Task::getPath)
+                  .collect(Collectors.toSet()));
+        });
   }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,16 +16,20 @@
 
 package com.google.cloud.tools.jib.maven;
 
-import com.google.cloud.tools.jib.docker.DockerContextGenerator;
+import com.google.cloud.tools.jib.filesystem.AbsoluteUnixPath;
 import com.google.cloud.tools.jib.frontend.ExposedPortsParser;
+import com.google.cloud.tools.jib.frontend.JavaDockerContextGenerator;
+import com.google.cloud.tools.jib.frontend.JavaEntrypointConstructor;
+import com.google.cloud.tools.jib.global.JibSystemProperties;
+import com.google.cloud.tools.jib.plugins.common.HelpfulSuggestions;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.io.InsecureRecursiveDeleteException;
 import java.io.IOException;
 import java.nio.file.Paths;
+import java.util.List;
 import javax.annotation.Nullable;
 import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
 import org.apache.maven.plugins.annotations.ResolutionScope;
@@ -40,51 +44,75 @@ public class DockerContextMojo extends JibPluginConfiguration {
 
   @Nullable
   @Parameter(
-      property = "jib.dockerDir",
+      property = "jibTargetDir",
       defaultValue = "${project.build.directory}/jib-docker-context",
       required = true)
-  private String targetDir;
+  @VisibleForTesting
+  String targetDir;
 
   @Override
-  public void execute() throws MojoExecutionException, MojoFailureException {
-    MavenBuildLogger mavenBuildLogger = new MavenBuildLogger(getLog());
-    handleDeprecatedParameters(mavenBuildLogger);
+  public void execute() throws MojoExecutionException {
+    if (isSkipped()) {
+      getLog().info("Skipping containerization because jib-maven-plugin: skip = true");
+      return;
+    }
+    if ("pom".equals(getProject().getPackaging())) {
+      getLog().info("Skipping containerization because packaging is 'pom'...");
+      return;
+    }
+
+    try {
+      JibSystemProperties.checkHttpTimeoutProperty();
+    } catch (NumberFormatException ex) {
+      throw new MojoExecutionException(ex.getMessage(), ex);
+    }
+
+    // TODO: Instead of disabling logging, have authentication credentials be provided
+    PluginConfigurationProcessor.disableHttpLogging();
 
     Preconditions.checkNotNull(targetDir);
 
+    AbsoluteUnixPath appRoot = PluginConfigurationProcessor.getAppRootChecked(this);
     MavenProjectProperties mavenProjectProperties =
-        MavenProjectProperties.getForProject(getProject(), mavenBuildLogger);
-    String mainClass = mavenProjectProperties.getMainClass(this);
+        MavenProjectProperties.getForProject(getProject(), getLog(), getExtraDirectory(), appRoot);
+
+    List<String> entrypoint = getEntrypoint();
+    if (entrypoint.isEmpty()) {
+      String mainClass = mavenProjectProperties.getMainClass(this);
+      entrypoint =
+          JavaEntrypointConstructor.makeDefaultEntrypoint(appRoot, getJvmFlags(), mainClass);
+    } else if (getMainClass() != null || !getJvmFlags().isEmpty()) {
+      getLog().warn("<mainClass> and <jvmFlags> are ignored when <entrypoint> is specified");
+    }
 
     try {
       // Validate port input, but don't save the output because we don't want the ranges expanded
       // here.
       ExposedPortsParser.parse(getExposedPorts());
 
-      // TODO: Add support for extra files layer.
-      new DockerContextGenerator(mavenProjectProperties.getSourceFilesConfiguration())
+      new JavaDockerContextGenerator(mavenProjectProperties.getJavaLayerConfigurations())
           .setBaseImage(getBaseImage())
-          .setJvmFlags(getJvmFlags())
-          .setMainClass(mainClass)
+          .setEntrypoint(entrypoint)
           .setJavaArguments(getArgs())
           .setExposedPorts(getExposedPorts())
+          .setLabels(getLabels())
           .generate(Paths.get(targetDir));
 
-      mavenBuildLogger.lifecycle("Created Docker context at " + targetDir);
+      getLog().info("Created Docker context at " + targetDir);
 
     } catch (InsecureRecursiveDeleteException ex) {
       throw new MojoExecutionException(
-          HelpfulSuggestionsProvider.get(
-                  "Export Docker context failed because cannot clear directory '"
-                      + targetDir
-                      + "' safely")
-              .forDockerContextInsecureRecursiveDelete(targetDir),
+          HelpfulSuggestions.forDockerContextInsecureRecursiveDelete(
+              "Export Docker context failed because cannot clear directory '"
+                  + targetDir
+                  + "' safely",
+              targetDir),
           ex);
 
     } catch (IOException ex) {
       throw new MojoExecutionException(
-          HelpfulSuggestionsProvider.get("Export Docker context failed")
-              .suggest("check if `targetDir` is set correctly"),
+          HelpfulSuggestions.suggest(
+              "Export Docker context failed", "check if `targetDir` is set correctly"),
           ex);
     }
   }

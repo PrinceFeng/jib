@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,12 +16,17 @@
 
 package com.google.cloud.tools.jib.gradle;
 
-import com.google.cloud.tools.jib.docker.DockerContextGenerator;
+import com.google.cloud.tools.jib.filesystem.AbsoluteUnixPath;
 import com.google.cloud.tools.jib.frontend.ExposedPortsParser;
+import com.google.cloud.tools.jib.frontend.JavaDockerContextGenerator;
+import com.google.cloud.tools.jib.frontend.JavaEntrypointConstructor;
+import com.google.cloud.tools.jib.global.JibSystemProperties;
+import com.google.cloud.tools.jib.plugins.common.HelpfulSuggestions;
 import com.google.common.base.Preconditions;
 import com.google.common.io.InsecureRecursiveDeleteException;
 import java.io.IOException;
 import java.nio.file.Paths;
+import java.util.List;
 import javax.annotation.Nullable;
 import org.gradle.api.DefaultTask;
 import org.gradle.api.GradleException;
@@ -33,7 +38,7 @@ import org.gradle.api.tasks.OutputDirectory;
 import org.gradle.api.tasks.TaskAction;
 import org.gradle.api.tasks.options.Option;
 
-public class DockerContextTask extends DefaultTask {
+public class DockerContextTask extends DefaultTask implements JibTask {
 
   @Nullable private String targetDir;
   @Nullable private JibExtension jibExtension;
@@ -57,7 +62,7 @@ public class DockerContextTask extends DefaultTask {
   @InputFiles
   public FileCollection getInputFiles() {
     return GradleProjectProperties.getInputFiles(
-        Preconditions.checkNotNull(jibExtension).getExtraDirectory(), getProject());
+        Preconditions.checkNotNull(jibExtension).getExtraDirectoryPath().toFile(), getProject());
   }
 
   /**
@@ -85,11 +90,11 @@ public class DockerContextTask extends DefaultTask {
   }
 
   /**
-   * The output directory can be overriden with the {@code --targetDir} command line option.
+   * The output directory can be overriden with the {@code --jibTargetDir} command line option.
    *
    * @param targetDir the output directory.
    */
-  @Option(option = "targetDir", description = "Directory to output the Docker context to")
+  @Option(option = "jibTargetDir", description = "Directory to output the Docker context to")
   public void setTargetDir(String targetDir) {
     this.targetDir = targetDir;
   }
@@ -97,49 +102,63 @@ public class DockerContextTask extends DefaultTask {
   @TaskAction
   public void generateDockerContext() {
     Preconditions.checkNotNull(jibExtension);
+    JibSystemProperties.checkHttpTimeoutProperty();
 
-    GradleBuildLogger gradleBuildLogger = new GradleBuildLogger(getLogger());
-    jibExtension.handleDeprecatedParameters(gradleBuildLogger);
+    // TODO: Instead of disabling logging, have authentication credentials be provided
+    PluginConfigurationProcessor.disableHttpLogging();
 
+    AbsoluteUnixPath appRoot = PluginConfigurationProcessor.getAppRootChecked(jibExtension);
     GradleProjectProperties gradleProjectProperties =
-        GradleProjectProperties.getForProject(getProject(), gradleBuildLogger);
-    String mainClass = gradleProjectProperties.getMainClass(jibExtension);
+        GradleProjectProperties.getForProject(
+            getProject(), getLogger(), jibExtension.getExtraDirectoryPath(), appRoot);
     String targetDir = getTargetDir();
+
+    List<String> entrypoint = jibExtension.getContainer().getEntrypoint();
+    if (entrypoint.isEmpty()) {
+      String mainClass = gradleProjectProperties.getMainClass(jibExtension);
+      entrypoint =
+          JavaEntrypointConstructor.makeDefaultEntrypoint(
+              appRoot, jibExtension.getContainer().getJvmFlags(), mainClass);
+    } else if (jibExtension.getContainer().getMainClass() != null
+        || !jibExtension.getContainer().getJvmFlags().isEmpty()) {
+      getLogger().warn("mainClass and jvmFlags are ignored when entrypoint is specified");
+    }
 
     try {
       // Validate port input, but don't save the output because we don't want the ranges expanded
       // here.
       ExposedPortsParser.parse(jibExtension.getExposedPorts());
 
-      // TODO: Add support for extra files layer.
-      new DockerContextGenerator(gradleProjectProperties.getSourceFilesConfiguration())
+      new JavaDockerContextGenerator(gradleProjectProperties.getJavaLayerConfigurations())
           .setBaseImage(jibExtension.getBaseImage())
-          .setJvmFlags(jibExtension.getJvmFlags())
-          .setMainClass(mainClass)
-          .setJavaArguments(jibExtension.getArgs())
+          .setEntrypoint(entrypoint)
+          .setJavaArguments(jibExtension.getContainer().getArgs())
           .setExposedPorts(jibExtension.getExposedPorts())
+          .setLabels(jibExtension.getLabels())
           .generate(Paths.get(targetDir));
 
-      gradleBuildLogger.lifecycle("Created Docker context at " + targetDir);
+      getLogger().lifecycle("Created Docker context at " + targetDir);
 
     } catch (InsecureRecursiveDeleteException ex) {
       throw new GradleException(
-          HelpfulSuggestionsProvider.get(
-                  "Export Docker context failed because cannot clear directory '"
-                      + getTargetDir()
-                      + "' safely")
-              .forDockerContextInsecureRecursiveDelete(getTargetDir()),
+          HelpfulSuggestions.forDockerContextInsecureRecursiveDelete(
+              "Export Docker context failed because cannot clear directory '"
+                  + getTargetDir()
+                  + "' safely",
+              getTargetDir()),
           ex);
 
     } catch (IOException ex) {
       throw new GradleException(
-          HelpfulSuggestionsProvider.get("Export Docker context failed")
-              .suggest("check if the command-line option `--jib.dockerDir` is set correctly"),
+          HelpfulSuggestions.suggest(
+              "Export Docker context failed",
+              "check if the command-line option `--jibTargetDir` is set correctly"),
           ex);
     }
   }
 
-  DockerContextTask setJibExtension(JibExtension jibExtension) {
+  @Override
+  public DockerContextTask setJibExtension(JibExtension jibExtension) {
     this.jibExtension = jibExtension;
     return this;
   }

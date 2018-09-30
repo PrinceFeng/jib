@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,8 +16,8 @@
 
 package com.google.cloud.tools.jib.maven;
 
-import com.google.cloud.tools.jib.builder.SourceFilesConfiguration;
-import com.google.cloud.tools.jib.image.ImageReference;
+import com.google.cloud.tools.jib.event.EventDispatcher;
+import com.google.cloud.tools.jib.frontend.JavaLayerConfigurations;
 import org.apache.maven.model.Plugin;
 import org.apache.maven.project.MavenProject;
 import org.codehaus.plexus.util.xml.Xpp3Dom;
@@ -34,10 +34,9 @@ import org.mockito.junit.MockitoJUnitRunner;
 public class MavenProjectPropertiesTest {
 
   @Mock private MavenProject mockMavenProject;
-  @Mock private MavenBuildLogger mockMavenBuildLogger;
-  @Mock private SourceFilesConfiguration mockSourcesFilesConfiguration;
+  @Mock private EventDispatcher mockEventDispatcher;
+  @Mock private JavaLayerConfigurations mockJavaLayerConfigurations;
   @Mock private Plugin mockJarPlugin;
-  @Mock private MavenBuildLogger mockBuildLogger;
 
   private Xpp3Dom jarPluginConfiguration;
   private Xpp3Dom archive;
@@ -48,11 +47,9 @@ public class MavenProjectPropertiesTest {
 
   @Before
   public void setup() {
-    Mockito.when(mockMavenProject.getName()).thenReturn("project-name");
-    Mockito.when(mockMavenProject.getVersion()).thenReturn("project-version");
     mavenProjectProperties =
         new MavenProjectProperties(
-            mockMavenProject, mockMavenBuildLogger, mockSourcesFilesConfiguration);
+            mockMavenProject, mockEventDispatcher, mockJavaLayerConfigurations);
     jarPluginConfiguration = new Xpp3Dom("");
     archive = new Xpp3Dom("archive");
     manifest = new Xpp3Dom("manifest");
@@ -80,7 +77,7 @@ public class MavenProjectPropertiesTest {
     jarPluginConfiguration.addChild(archive);
     archive.addChild(manifest);
 
-    Assert.assertEquals(null, mavenProjectProperties.getMainClassFromJar());
+    Assert.assertNull(mavenProjectProperties.getMainClassFromJar());
   }
 
   @Test
@@ -90,7 +87,7 @@ public class MavenProjectPropertiesTest {
     Mockito.when(mockJarPlugin.getConfiguration()).thenReturn(jarPluginConfiguration);
     jarPluginConfiguration.addChild(archive);
 
-    Assert.assertEquals(null, mavenProjectProperties.getMainClassFromJar());
+    Assert.assertNull(mavenProjectProperties.getMainClassFromJar());
   }
 
   @Test
@@ -99,7 +96,7 @@ public class MavenProjectPropertiesTest {
         .thenReturn(mockJarPlugin);
     Mockito.when(mockJarPlugin.getConfiguration()).thenReturn(jarPluginConfiguration);
 
-    Assert.assertEquals(null, mavenProjectProperties.getMainClassFromJar());
+    Assert.assertNull(mavenProjectProperties.getMainClassFromJar());
   }
 
   @Test
@@ -107,33 +104,16 @@ public class MavenProjectPropertiesTest {
     Mockito.when(mockMavenProject.getPlugin("org.apache.maven.plugins:maven-jar-plugin"))
         .thenReturn(mockJarPlugin);
 
-    Assert.assertEquals(null, mavenProjectProperties.getMainClassFromJar());
+    Assert.assertNull(mavenProjectProperties.getMainClassFromJar());
   }
 
   @Test
   public void testGetMainClassFromJar_missingPlugin() {
-    Assert.assertEquals(null, mavenProjectProperties.getMainClassFromJar());
+    Assert.assertNull(mavenProjectProperties.getMainClassFromJar());
   }
 
   @Test
-  public void testGetDockerTag_configured() {
-    ImageReference result =
-        mavenProjectProperties.getGeneratedTargetDockerTag("a/b:c", mockBuildLogger);
-    Assert.assertEquals("a/b", result.getRepository());
-    Assert.assertEquals("c", result.getTag());
-    Mockito.verify(mockBuildLogger, Mockito.never()).lifecycle(Mockito.any());
-  }
-
-  @Test
-  public void testGetDockerTag_notConfigured() {
-    ImageReference result =
-        mavenProjectProperties.getGeneratedTargetDockerTag(null, mockBuildLogger);
-    Assert.assertEquals("project-name", result.getRepository());
-    Assert.assertEquals("project-version", result.getTag());
-    Mockito.verify(mockBuildLogger)
-        .lifecycle(
-            "Tagging image with generated image reference project-name:project-version. If you'd "
-                + "like to specify a different tag, you can set the <to><image> parameter in your "
-                + "pom.xml, or use the -Dimage=<MY IMAGE> commandline flag.");
+  public void testIsWarProject() {
+    Assert.assertFalse(mavenProjectProperties.isWarProject());
   }
 }

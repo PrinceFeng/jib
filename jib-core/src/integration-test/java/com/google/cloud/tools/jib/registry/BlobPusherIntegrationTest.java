@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Google LLC. All rights reserved.
+ * Copyright 2017 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -18,6 +18,7 @@ package com.google.cloud.tools.jib.registry;
 
 import com.google.cloud.tools.jib.blob.Blob;
 import com.google.cloud.tools.jib.blob.Blobs;
+import com.google.cloud.tools.jib.event.EventDispatcher;
 import com.google.cloud.tools.jib.image.DescriptorDigest;
 import java.io.IOException;
 import java.security.DigestException;
@@ -29,9 +30,12 @@ import org.junit.Test;
 public class BlobPusherIntegrationTest {
 
   @ClassRule public static LocalRegistry localRegistry = new LocalRegistry(5000);
+  private static final EventDispatcher EVENT_DISPATCHER = jibEvent -> {};
 
   @Test
-  public void testPush() throws DigestException, IOException, RegistryException {
+  public void testPush()
+      throws DigestException, IOException, RegistryException, InterruptedException {
+    localRegistry.pullAndPushToLocal("busybox", "busybox");
     Blob testBlob = Blobs.from("crepecake");
     // Known digest for 'crepecake'
     DescriptorDigest testBlobDigest =
@@ -39,9 +43,9 @@ public class BlobPusherIntegrationTest {
             "52a9e4d4ba4333ce593707f98564fee1e6d898db0d3602408c0b2a6a424d357c");
 
     RegistryClient registryClient =
-        RegistryClient.factory("localhost:5000", "testimage")
-            .setAllowHttp(true)
+        RegistryClient.factory(EVENT_DISPATCHER, "localhost:5000", "testimage")
+            .setAllowInsecureRegistries(true)
             .newRegistryClient();
-    Assert.assertFalse(registryClient.pushBlob(testBlobDigest, testBlob));
+    Assert.assertFalse(registryClient.pushBlob(testBlobDigest, testBlob, null));
   }
 }

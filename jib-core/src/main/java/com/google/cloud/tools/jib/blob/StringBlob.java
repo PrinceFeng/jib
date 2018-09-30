@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Google LLC. All rights reserved.
+ * Copyright 2017 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -22,7 +22,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 
-/** A {@link Blob} that holds a {@link String}. */
+/** A {@link Blob} that holds a {@link String}. Encodes in UTF-8 when writing in bytes. */
 class StringBlob implements Blob {
 
   private final String content;

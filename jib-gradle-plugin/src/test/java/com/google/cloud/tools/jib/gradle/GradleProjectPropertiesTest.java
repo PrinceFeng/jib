@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,9 +16,8 @@
 
 package com.google.cloud.tools.jib.gradle;
 
-import com.google.cloud.tools.jib.builder.SourceFilesConfiguration;
-import com.google.cloud.tools.jib.image.ImageReference;
-import com.google.cloud.tools.jib.image.InvalidImageReferenceException;
+import com.google.cloud.tools.jib.event.EventDispatcher;
+import com.google.cloud.tools.jib.frontend.JavaLayerConfigurations;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import java.util.Collections;
@@ -26,6 +25,10 @@ import org.gradle.api.Project;
 import org.gradle.api.internal.file.FileResolver;
 import org.gradle.api.java.archives.Manifest;
 import org.gradle.api.java.archives.internal.DefaultManifest;
+import org.gradle.api.plugins.Convention;
+import org.gradle.api.plugins.WarPluginConvention;
+import org.gradle.api.tasks.TaskContainer;
+import org.gradle.api.tasks.bundling.War;
 import org.gradle.jvm.tasks.Jar;
 import org.junit.Assert;
 import org.junit.Before;
@@ -43,10 +46,11 @@ public class GradleProjectPropertiesTest {
   @Mock private Jar mockJar;
   @Mock private Jar mockJar2;
   @Mock private Project mockProject;
-  @Mock private GradleBuildLogger mockGradleBuildLogger;
-  @Mock private SourceFilesConfiguration mockSourceFilesConfiguration;
-  @Mock private JibExtension mockJibExtension;
-  @Mock private GradleBuildLogger mockBuildLogger;
+  @Mock private Convention mockConvention;
+  @Mock private WarPluginConvention mockWarPluginConvection;
+  @Mock private TaskContainer mockTaskContainer;
+  @Mock private EventDispatcher mockEventDispatcher;
+  @Mock private JavaLayerConfigurations mockJavaLayerConfigurations;
 
   private Manifest manifest;
   private GradleProjectProperties gradleProjectProperties;
@@ -54,11 +58,16 @@ public class GradleProjectPropertiesTest {
   @Before
   public void setup() {
     manifest = new DefaultManifest(mockFileResolver);
+    Mockito.when(mockProject.getConvention()).thenReturn(mockConvention);
+    Mockito.when(mockConvention.findPlugin(WarPluginConvention.class))
+        .thenReturn(mockWarPluginConvection);
+    Mockito.when(mockWarPluginConvection.getProject()).thenReturn(mockProject);
+    Mockito.when(mockProject.getTasks()).thenReturn(mockTaskContainer);
+    Mockito.when(mockTaskContainer.findByName("war")).thenReturn(Mockito.mock(War.class));
     Mockito.when(mockJar.getManifest()).thenReturn(manifest);
 
     gradleProjectProperties =
-        new GradleProjectProperties(
-            mockProject, mockGradleBuildLogger, mockSourceFilesConfiguration);
+        new GradleProjectProperties(mockProject, mockEventDispatcher, mockJavaLayerConfigurations);
   }
 
   @Test
@@ -71,7 +80,7 @@ public class GradleProjectPropertiesTest {
   @Test
   public void testGetMainClassFromJar_missing() {
     Mockito.when(mockProject.getTasksByName("jar", false)).thenReturn(Collections.emptySet());
-    Assert.assertEquals(null, gradleProjectProperties.getMainClassFromJar());
+    Assert.assertNull(gradleProjectProperties.getMainClassFromJar());
   }
 
   @Test
@@ -79,32 +88,30 @@ public class GradleProjectPropertiesTest {
     manifest.attributes(ImmutableMap.of("Main-Class", "some.main.class"));
     Mockito.when(mockProject.getTasksByName("jar", false))
         .thenReturn(ImmutableSet.of(mockJar, mockJar2));
-    Assert.assertEquals(null, gradleProjectProperties.getMainClassFromJar());
+    Assert.assertNull(gradleProjectProperties.getMainClassFromJar());
   }
 
   @Test
-  public void testGetDockerTag_configured() throws InvalidImageReferenceException {
-    Mockito.when(mockJibExtension.getTargetImage()).thenReturn("a/b:c");
-    ImageReference result =
-        gradleProjectProperties.getGeneratedTargetDockerTag(mockJibExtension, mockBuildLogger);
-    Assert.assertEquals("a/b", result.getRepository());
-    Assert.assertEquals("c", result.getTag());
-    Mockito.verify(mockBuildLogger, Mockito.never()).lifecycle(Mockito.any());
+  public void testIsWarProject() {
+    Assert.assertFalse(gradleProjectProperties.isWarProject());
   }
 
   @Test
-  public void testGetDockerTag_notConfigured() throws InvalidImageReferenceException {
-    Mockito.when(mockProject.getName()).thenReturn("project-name");
-    Mockito.when(mockProject.getVersion()).thenReturn("project-version");
-    Mockito.when(mockJibExtension.getTargetImage()).thenReturn(null);
-    ImageReference result =
-        gradleProjectProperties.getGeneratedTargetDockerTag(mockJibExtension, mockBuildLogger);
-    Assert.assertEquals("project-name", result.getRepository());
-    Assert.assertEquals("project-version", result.getTag());
-    Mockito.verify(mockBuildLogger)
-        .lifecycle(
-            "Tagging image with generated image reference project-name:project-version. If you'd "
-                + "like to specify a different tag, you can set the jib.to.image parameter in your "
-                + "build.gradle, or use the --image=<MY IMAGE> commandline flag.");
+  public void testGetWar_warProject() {
+    Assert.assertNotNull(GradleProjectProperties.getWarTask(mockProject));
+  }
+
+  @Test
+  public void testGetWar_noWarPlugin() {
+    Mockito.when(mockConvention.findPlugin(WarPluginConvention.class)).thenReturn(null);
+
+    Assert.assertNull(GradleProjectProperties.getWarTask(mockProject));
+  }
+
+  @Test
+  public void testGetWar_noWarTask() {
+    Mockito.when(mockTaskContainer.findByName("war")).thenReturn(null);
+
+    Assert.assertNull(GradleProjectProperties.getWarTask(mockProject));
   }
 }

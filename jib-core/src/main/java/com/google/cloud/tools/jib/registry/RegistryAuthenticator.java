@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Google LLC. All rights reserved.
+ * Copyright 2017 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -18,6 +18,8 @@ package com.google.cloud.tools.jib.registry;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.google.cloud.tools.jib.blob.Blobs;
+import com.google.cloud.tools.jib.event.EventDispatcher;
+import com.google.cloud.tools.jib.global.JibSystemProperties;
 import com.google.cloud.tools.jib.http.Authorization;
 import com.google.cloud.tools.jib.http.Authorizations;
 import com.google.cloud.tools.jib.http.Connection;
@@ -44,23 +46,26 @@ public class RegistryAuthenticator {
   /** Initializer for {@link RegistryAuthenticator}. */
   public static class Initializer {
 
+    private final EventDispatcher eventDispatcher;
     private final String serverUrl;
     private final String repository;
-    private boolean allowHttp = false;
+    private boolean allowInsecureRegistries = false;
 
     /**
      * Instantiates a new initializer for {@link RegistryAuthenticator}.
      *
+     * @param eventDispatcher the event dispatcher used for dispatching log events
      * @param serverUrl the server URL for the registry (for example, {@code gcr.io})
      * @param repository the image/repository name (also known as, namespace)
      */
-    private Initializer(String serverUrl, String repository) {
+    private Initializer(EventDispatcher eventDispatcher, String serverUrl, String repository) {
+      this.eventDispatcher = eventDispatcher;
       this.serverUrl = serverUrl;
       this.repository = repository;
     }
 
-    public Initializer setAllowHttp(boolean allowHttp) {
-      this.allowHttp = allowHttp;
+    public Initializer setAllowInsecureRegistries(boolean allowInsecureRegistries) {
+      this.allowInsecureRegistries = allowInsecureRegistries;
       return this;
     }
 
@@ -77,16 +82,16 @@ public class RegistryAuthenticator {
     public RegistryAuthenticator initialize()
         throws RegistryAuthenticationFailedException, IOException, RegistryException {
       try {
-        return RegistryClient.factory(serverUrl, repository)
-            .setAllowHttp(allowHttp)
+        return RegistryClient.factory(eventDispatcher, serverUrl, repository)
+            .setAllowInsecureRegistries(allowInsecureRegistries)
             .newRegistryClient()
             .getRegistryAuthenticator();
 
       } catch (MalformedURLException ex) {
-        throw new RegistryAuthenticationFailedException(ex);
+        throw new RegistryAuthenticationFailedException(serverUrl, repository, ex);
 
       } catch (InsecureRegistryException ex) {
-        // HTTP is not allowed, so just return null.
+        // Cannot skip certificate validation or use HTTP, so just return null.
         return null;
       }
     }
@@ -95,12 +100,14 @@ public class RegistryAuthenticator {
   /**
    * Gets a new initializer for {@link RegistryAuthenticator}.
    *
+   * @param eventDispatcher the event dispatcher used for dispatching log events
    * @param serverUrl the server URL for the registry (for example, {@code gcr.io})
    * @param repository the image/repository name (also known as, namespace)
    * @return the new {@link Initializer}
    */
-  public static Initializer initializer(String serverUrl, String repository) {
-    return new Initializer(serverUrl, repository);
+  public static Initializer initializer(
+      EventDispatcher eventDispatcher, String serverUrl, String repository) {
+    return new Initializer(eventDispatcher, serverUrl, repository);
   }
 
   // TODO: Replace with a WWW-Authenticate header parser.
@@ -127,13 +134,21 @@ public class RegistryAuthenticator {
 
     // Checks that the authentication method starts with 'bearer ' (case insensitive).
     if (!authenticationMethod.matches("^(?i)(bearer) .*")) {
-      throw newRegistryAuthenticationFailedException(authenticationMethod, "Bearer");
+      throw newRegistryAuthenticationFailedException(
+          registryEndpointRequestProperties.getServerUrl(),
+          registryEndpointRequestProperties.getImageName(),
+          authenticationMethod,
+          "Bearer");
     }
 
     Pattern realmPattern = Pattern.compile("realm=\"(.*?)\"");
     Matcher realmMatcher = realmPattern.matcher(authenticationMethod);
     if (!realmMatcher.find()) {
-      throw newRegistryAuthenticationFailedException(authenticationMethod, "realm");
+      throw newRegistryAuthenticationFailedException(
+          registryEndpointRequestProperties.getServerUrl(),
+          registryEndpointRequestProperties.getImageName(),
+          authenticationMethod,
+          "realm");
     }
     String realm = realmMatcher.group(1);
 
@@ -145,13 +160,14 @@ public class RegistryAuthenticator {
             ? serviceMatcher.group(1)
             : registryEndpointRequestProperties.getServerUrl();
 
-    return new RegistryAuthenticator(
-        realm, service, registryEndpointRequestProperties.getImageName());
+    return new RegistryAuthenticator(realm, service, registryEndpointRequestProperties);
   }
 
   private static RegistryAuthenticationFailedException newRegistryAuthenticationFailedException(
-      String authenticationMethod, String authParam) {
+      String registry, String repository, String authenticationMethod, String authParam) {
     return new RegistryAuthenticationFailedException(
+        registry,
+        repository,
         "'"
             + authParam
             + "' was not found in the 'WWW-Authenticate' header, tried to parse: "
@@ -183,10 +199,21 @@ public class RegistryAuthenticator {
   }
 
   private final String authenticationUrlBase;
+  private final RegistryEndpointRequestProperties registryEndpointRequestProperties;
   @Nullable private Authorization authorization;
 
-  RegistryAuthenticator(String realm, String service, String repository) {
-    authenticationUrlBase = realm + "?service=" + service + "&scope=repository:" + repository + ":";
+  RegistryAuthenticator(
+      String realm,
+      String service,
+      RegistryEndpointRequestProperties registryEndpointRequestProperties) {
+    authenticationUrlBase =
+        realm
+            + "?service="
+            + service
+            + "&scope=repository:"
+            + registryEndpointRequestProperties.getImageName()
+            + ":";
+    this.registryEndpointRequestProperties = registryEndpointRequestProperties;
   }
 
   /**
@@ -238,8 +265,9 @@ public class RegistryAuthenticator {
     try {
       URL authenticationUrl = getAuthenticationUrl(scope);
 
-      try (Connection connection = new Connection(authenticationUrl)) {
-        Request.Builder requestBuilder = Request.builder();
+      try (Connection connection = Connection.getConnectionFactory().apply(authenticationUrl)) {
+        Request.Builder requestBuilder =
+            Request.builder().setHttpTimeout(JibSystemProperties.getHttpTimeout());
         if (authorization != null) {
           requestBuilder.setAuthorization(authorization);
         }
@@ -250,13 +278,18 @@ public class RegistryAuthenticator {
             JsonTemplateMapper.readJson(responseString, AuthenticationResponseTemplate.class);
         if (responseJson.getToken() == null) {
           throw new RegistryAuthenticationFailedException(
+              registryEndpointRequestProperties.getServerUrl(),
+              registryEndpointRequestProperties.getImageName(),
               "Did not get token in authentication response from " + authenticationUrl);
         }
         return Authorizations.withBearerToken(responseJson.getToken());
       }
 
     } catch (IOException ex) {
-      throw new RegistryAuthenticationFailedException(ex);
+      throw new RegistryAuthenticationFailedException(
+          registryEndpointRequestProperties.getServerUrl(),
+          registryEndpointRequestProperties.getImageName(),
+          ex);
     }
   }
 }

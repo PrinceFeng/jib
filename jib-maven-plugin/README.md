@@ -1,5 +1,4 @@
-[![experimental](http://badges.github.io/stability-badges/dist/experimental.svg)](http://github.com/badges/stability-badges)
-[![Analytics](https://cloud-tools-for-java-metrics.appspot.com/UA-121724379-2/jib-maven-plugin)](https://github.com/igrigorik/ga-beacon)
+![beta](https://img.shields.io/badge/stability-beta-darkorange.svg)
 [![Maven Central](https://maven-badges.herokuapp.com/maven-central/com.google.cloud.tools/jib-maven-plugin/badge.svg)](https://maven-badges.herokuapp.com/maven-central/com.google.cloud.tools/jib-maven-plugin)
 [![Gitter version](https://img.shields.io/gitter/room/gitterHQ/gitter.svg)](https://gitter.im/google/jib)
 
@@ -19,7 +18,7 @@ See [Milestones](https://github.com/GoogleContainerTools/jib/milestones) for pla
 You can containerize your application easily with one command:
 
 ```shell
-mvn compile com.google.cloud.tools:jib-maven-plugin:0.9.6:build -Dimage=<MY IMAGE>
+mvn compile com.google.cloud.tools:jib-maven-plugin:0.9.11:build -Dimage=<MY IMAGE>
 ```
 
 This builds and pushes a container image for your application to a container registry. *If you encounter authentication issues, see [Authentication Methods](#authentication-methods).*
@@ -27,7 +26,7 @@ This builds and pushes a container image for your application to a container reg
 To build to a Docker daemon, use:
 
 ```shell
-mvn compile com.google.cloud.tools:jib-maven-plugin:0.9.6:dockerBuild
+mvn compile com.google.cloud.tools:jib-maven-plugin:0.9.11:dockerBuild
 ```
 
 If you would like to set up Jib as part of your Maven build, follow the guide below.
@@ -45,7 +44,7 @@ In your Maven Java project, add the plugin to your `pom.xml`:
       <plugin>
         <groupId>com.google.cloud.tools</groupId>
         <artifactId>jib-maven-plugin</artifactId>
-        <version>0.9.6</version>
+        <version>0.9.11</version>
         <configuration>
           <to>
             <image>myimage</image>
@@ -134,6 +133,20 @@ eval $(minikube docker-env)
 mvn compile jib:dockerBuild
 ```
 
+#### Build an image tarball
+
+You can build and save your image to disk as a tarball with:
+
+```shell
+mvn compile jib:buildTar
+```
+
+This builds and saves your image to `target/jib-image.tar`, which you can load into docker with:
+
+```shell
+docker load --input target/jib-image.tar
+```
+
 ### Bind to a lifecycle
 
 You can also bind `jib:build` to a Maven lifecycle, such as `package`, by adding the following execution to your `jib-maven-plugin` definition:
@@ -168,10 +181,10 @@ Jib can also export a Docker context so that you can build with Docker, if neede
 mvn compile jib:exportDockerContext
 ```
 
-The Docker context will be created at `target/jib-docker-context` by default. You can change this directory with the `targetDir` configuration option or the `jib.dockerDir` parameter:
+The Docker context will be created at `target/jib-docker-context` by default. You can change this directory with the `targetDir` configuration option or the `jibTargetDir` parameter:
 
 ```shell
-mvn compile jib:exportDockerContext -Djib.dockerDir=my/docker/context/
+mvn compile jib:exportDockerContext -DjibTargetDir=my/docker/context/
 ```
 
 You can then build your image with Docker:
@@ -186,17 +199,19 @@ Extended configuration options provide additional options for customizing the im
 
 Field | Type | Default | Description
 --- | --- | --- | ---
-`from` | [`from`](#from-object) | See [`from`](#from-object) | Configures the base image to build your application on top of.
 `to` | [`to`](#to-object) | *Required* | Configures the target image to build your application to.
+`from` | [`from`](#from-object) | See [`from`](#from-object) | Configures the base image to build your application on top of.
 `container` | [`container`](#container-object) | See [`container`](#container-object) | Configures the container that is run from your image.
-`useOnlyProjectCache` | boolean | `false` | If set to true, Jib does not share a cache between different Gradle projects.
-`allowInsecureRegistries` | boolean | `false` | If set to true, Jib uses HTTP as a fallback for registries that do not support HTTPS. Leaving this parameter set to false is strongly recommended, since communication with insecure registries is unencrypted and visible to others on the network.
+`allowInsecureRegistries` | boolean | `false` | If set to true, Jib ignores HTTPS certificate errors and may fall back to HTTP as a last resort. Leaving this parameter set to `false` is strongly recommended, since HTTP communication is unencrypted and visible to others on the network, and insecure HTTPS is no better than plain HTTP. [If accessing a registry with a self-signed certificate, adding the certificate to your Java runtime's trusted keys](https://github.com/GoogleContainerTools/jib/tree/master/docs/self_sign_cert.md) may be an alternative to enabling this option.
+`skip` | boolean | `false` | If set to true, Jib execution is skipped (useful for multi-module projects). This can also be specified via the `-Djib.skip` command line option.
+`useOnlyProjectCache` | boolean | `false` | If set to true, Jib does not share a cache between different Maven projects.
 
 <a name="from-object"></a>`from` is an object with the following properties:
 
 Property | Type | Default | Description
 --- | --- | --- | ---
 `image` | string | `gcr.io/distroless/java` | The image reference for the base image.
+`auth` | [`auth`](#auth-object) | *None* | Specify credentials directly (alternative to `credHelper`).
 `credHelper` | string | *None* | Suffix for the credential helper that can authenticate pulling the base image (following `docker-credential-`).
 
 <a name="to-object"></a>`to` is an object with the following properties:
@@ -204,17 +219,37 @@ Property | Type | Default | Description
 Property | Type | Default | Description
 --- | --- | --- | ---
 `image` | string | *Required* | The image reference for the target image. This can also be specified via the `-Dimage` command line option.
+`auth` | [`auth`](#auth-object) | *None* | Specify credentials directly (alternative to `credHelper`).
 `credHelper` | string | *None* | Suffix for the credential helper that can authenticate pulling the base image (following `docker-credential-`).
+`tags` | list | *None* | Additional tags to push to.
+
+<a name="auth-object"></a>`auth` is an object with the following properties (see [Using Specific Credentials](#using-specific-credentials)):
+
+Property | Type
+--- | ---
+`username` | `String`
+`password` | `String`
 
 <a name="container-object"></a>`container` is an object with the following properties:
 
 Property | Type | Default | Description
 --- | --- | --- | ---
-`jvmFlags` | list | *None* | Additional flags to pass into the JVM when running your application.
-`mainClass` | string | *Inferred\** | The main class to launch the application from.
+`appRoot` | string | `/app` | The root directory on the container where the app's contents are placed. 
 `args` | list | *None* | Default main method arguments to run your application with.
-`ports` | `List<String>` | *None* | Ports that the container exposes at runtime (similar to Docker's [EXPOSE](https://docs.docker.com/engine/reference/builder/#expose) instruction).
+`entrypoint` | list | *None* | The command to start the container with (similar to Docker's [ENTRYPOINT](https://docs.docker.com/engine/reference/builder/#entrypoint) instruction). If set, then `jvmFlags` and `mainClass` are ignored.
+`environment` | map | *None* | Key-value pairs for setting environment variables on the container (similar to Docker's [ENV](https://docs.docker.com/engine/reference/builder/#env) instruction).
 `format` | string | `Docker` | Use `OCI` to build an [OCI container image](https://www.opencontainers.org/).
+`jvmFlags` | list | *None* | Additional flags to pass into the JVM when running your application.
+`labels` | map | *None* | Key-value pairs for applying image metadata (similar to Docker's [LABEL](https://docs.docker.com/engine/reference/builder/#label) instruction).
+`mainClass` | string | *Inferred\** | The main class to launch the application from.
+`ports` | list | *None* | Ports that the container exposes at runtime (similar to Docker's [EXPOSE](https://docs.docker.com/engine/reference/builder/#expose) instruction).
+`useCurrentTimestamp` | boolean | `false` | By default, Jib wipes all timestamps to guarantee reproducibility. If this parameter is set to `true`, Jib will set the image's creation timestamp to the time of the build, which sacrifices reproducibility for easily being able to tell when your image was created.
+
+You can also configure HTTP connection/read timeouts for registry interactions using the `jib.httpTimeout` system property, configured in milliseconds via commandline (the default is `20000`; you can also set it to `0` for infinite timeout):
+
+```shell
+mvn compile jib:build -Djib.httpTimeout=3000
+```
 
 *\* Uses `mainClass` from `maven-jar-plugin` or tries to find a valid main class.*
 
@@ -222,9 +257,10 @@ Property | Type | Default | Description
 
 In this configuration, the image:
 * Is built from a base of `openjdk:alpine` (pulled from Docker Hub)
-* Is pushed to `localhost:5000/my-image:built-with-jib`
+* Is pushed to `localhost:5000/my-image:built-with-jib`, `localhost:5000/my-image:tag2`, and `localhost:5000/my-image:latest`
 * Runs by calling `java -Xms512m -Xdebug -Xmy:flag=jib-rules -cp app/libs/*:app/resources:app/classes mypackage.MyApp some args`
 * Exposes port 1000 for tcp (default), and ports 2000, 2001, 2002, and 2003 for udp
+* Has two labels (key1:value1 and key2:value2)
 * Is built as OCI format
 
 ```xml
@@ -235,6 +271,10 @@ In this configuration, the image:
   <to>
     <image>localhost:5000/my-image:built-with-jib</image>
     <credHelper>osxkeychain</credHelper>
+    <tags>
+      <tag>tag2</tag>
+      <tag>latest</tag>
+    </tags>
   </to>
   <container>
     <jvmFlags>
@@ -251,8 +291,29 @@ In this configuration, the image:
       <port>1000</port>
       <port>2000-2003/udp</port>
     </ports>
+    <labels>
+      <key1>value1</key1>
+      <key2>value2</key2>
+    </labels>
     <format>OCI</format>
   </container>
+</configuration>
+```
+
+### Adding Arbitrary Files to the Image
+
+*\* Note: this is an incubating feature and may change in the future.*
+
+You can add arbitrary, non-classpath files to the image by placing them in a `src/main/jib` directory. This will copy all files within the `jib` folder to the image's root directory, maintaining the same structure (e.g. if you have a text file at `src/main/jib/dir/hello.txt`, then your image will contain `/dir/hello.txt` after being built with Jib).
+
+You can configure a different directory by using the `extraDirectory` parameter in your `pom.xml`:
+
+```xml
+<configuration>
+  ...
+  <!-- Copies files from 'src/main/custom-extra-dir' instead of 'src/main/jib' -->
+  <extraDirectory>${project.basedir}/src/main/custom-extra-dir</extraDirectory>
+  ...
 </configuration>
 ```
 
@@ -290,6 +351,44 @@ Configure credential helpers to use by specifying them as a `credHelper` for the
 </configuration>
 ```
 
+#### Using Specific Credentials
+
+You can specify credentials directly in the `<auth>` parameter for the `from` and/or `to` images. In the example below, `to` credentials are retrieved from the `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` environment variables.
+
+```xml
+<configuration>
+  ...
+  <from>
+    <image>aws_account_id.dkr.ecr.region.amazonaws.com/my-base-image</image>
+    <auth>
+      <username>my_username</username>
+      <password>my_password</password>
+    </auth>
+  </from>
+  <to>
+    <image>gcr.io/my-gcp-project/my-app</image>
+    <auth>
+      <username>${env.REGISTRY_USERNAME}</username>
+      <password>${env.REGISTRY_PASSWORD}</password>
+    </auth>
+  </to>
+  ...
+</configuration>
+```
+
+Alternatively, you can specify credentials via commandline using the following system properties.
+
+Property | Description
+--- | ---
+`-Djib.from.auth.username` | Username for base image registry.
+`-Djib.from.auth.password` | Password for base image registry.
+`-Djib.to.auth.username` | Username for target image registry.
+`-Djib.to.auth.password` | Password for target image registry.
+
+e.g. `mvn compile jib:build -Djib.to.auth.username=user -Djib.to.auth.password=pass`
+
+**Note:** This method of authentication should be used only as a last resort, as it is insecure to make your password visible in plain text.
+
 #### Using Maven Settings
 
 Registry credentials can be added to your [Maven settings](https://maven.apache.org/settings.html). These credentials will be used if credentials could not be found in any specified Docker credential helpers.
@@ -320,8 +419,10 @@ See the [Jib project README](/../../#how-jib-works).
 
 ## Frequently Asked Questions (FAQ)
 
-See the [Jib project README](/../../#frequently-asked-questions-faq).
+See the [Jib project FAQ](../docs/faq.md).
 
 ## Community
 
 See the [Jib project README](/../../#community).
+
+[![Analytics](https://cloud-tools-for-java-metrics.appspot.com/UA-121724379-2/jib-maven-plugin)](https://github.com/igrigorik/ga-beacon)

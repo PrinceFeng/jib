@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,13 +16,14 @@
 
 package com.google.cloud.tools.jib.maven;
 
-import com.google.cloud.tools.jib.http.Authorizations;
-import com.google.cloud.tools.jib.registry.credentials.RegistryCredentials;
+import com.google.cloud.tools.jib.configuration.credentials.Credential;
 import com.google.common.annotations.VisibleForTesting;
+import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.annotation.Nullable;
 import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.plugin.logging.Log;
 import org.apache.maven.settings.Server;
 import org.apache.maven.settings.Settings;
 import org.apache.maven.settings.building.SettingsProblem;
@@ -37,7 +38,7 @@ import org.apache.maven.settings.crypto.SettingsDecryptionResult;
  */
 class MavenSettingsServerCredentials {
 
-  @VisibleForTesting static final String CREDENTIAL_SOURCE = "Maven settings";
+  static final String CREDENTIAL_SOURCE = "Maven settings";
 
   // pattern cribbed directly from
   // https://github.com/sonatype/plexus-cipher/blob/master/src/main/java/org/sonatype/plexus/components/cipher/DefaultPlexusCipher.java
@@ -57,40 +58,37 @@ class MavenSettingsServerCredentials {
 
   private final Settings settings;
   @Nullable private final SettingsDecrypter settingsDecrypter;
-  private final MavenBuildLogger mavenBuildLogger;
+  private final Log log;
 
   /**
    * Create new instance.
    *
    * @param settings the Maven settings object
    * @param settingsDecrypter the Maven decrypter component
-   * @param mavenBuildLogger the Maven build log
+   * @param log the Maven build logger
    */
   MavenSettingsServerCredentials(
-      Settings settings,
-      @Nullable SettingsDecrypter settingsDecrypter,
-      MavenBuildLogger mavenBuildLogger) {
+      Settings settings, @Nullable SettingsDecrypter settingsDecrypter, Log log) {
     this.settings = settings;
     this.settingsDecrypter = settingsDecrypter;
-    this.mavenBuildLogger = mavenBuildLogger;
+    this.log = log;
   }
 
   /**
    * Attempts to retrieve credentials for {@code registry} from Maven settings.
    *
    * @param registry the registry
-   * @return the credentials for the registry
+   * @return the credentials for the registry, or {@link Optional#empty} if none could be retrieved
    * @throws MojoExecutionException if the credentials could not be retrieved
    */
-  @Nullable
-  RegistryCredentials retrieve(@Nullable String registry) throws MojoExecutionException {
+  Optional<Credential> retrieve(@Nullable String registry) throws MojoExecutionException {
     if (registry == null) {
-      return null;
+      return Optional.empty();
     }
 
     Server registryServer = settings.getServer(registry);
     if (registryServer == null) {
-      return null;
+      return Optional.empty();
     }
 
     if (settingsDecrypter != null) {
@@ -113,15 +111,13 @@ class MavenSettingsServerCredentials {
         registryServer = result.getServer();
       }
     } else if (isEncrypted(registryServer.getPassword())) {
-      mavenBuildLogger.warn(
+      log.warn(
           "Server password for registry "
               + registry
               + " appears to be encrypted, but there is no decrypter available");
     }
 
-    return new RegistryCredentials(
-        CREDENTIAL_SOURCE,
-        Authorizations.withBasicCredentials(
-            registryServer.getUsername(), registryServer.getPassword()));
+    return Optional.of(
+        Credential.basic(registryServer.getUsername(), registryServer.getPassword()));
   }
 }

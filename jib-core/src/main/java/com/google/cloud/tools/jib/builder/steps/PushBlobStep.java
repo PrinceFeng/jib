@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,12 +16,13 @@
 
 package com.google.cloud.tools.jib.builder.steps;
 
-import com.google.cloud.tools.jib.Timer;
 import com.google.cloud.tools.jib.async.AsyncStep;
 import com.google.cloud.tools.jib.async.NonBlockingSteps;
 import com.google.cloud.tools.jib.blob.Blob;
 import com.google.cloud.tools.jib.blob.BlobDescriptor;
-import com.google.cloud.tools.jib.builder.BuildConfiguration;
+import com.google.cloud.tools.jib.builder.TimerEventDispatcher;
+import com.google.cloud.tools.jib.configuration.BuildConfiguration;
+import com.google.cloud.tools.jib.event.events.LogEvent;
 import com.google.cloud.tools.jib.registry.RegistryClient;
 import com.google.cloud.tools.jib.registry.RegistryException;
 import com.google.common.util.concurrent.Futures;
@@ -66,25 +67,25 @@ class PushBlobStep implements AsyncStep<BlobDescriptor>, Callable<BlobDescriptor
 
   @Override
   public BlobDescriptor call() throws IOException, RegistryException, ExecutionException {
-    try (Timer timer =
-        new Timer(buildConfiguration.getBuildLogger(), DESCRIPTION + blobDescriptor)) {
+    try (TimerEventDispatcher ignored =
+        new TimerEventDispatcher(
+            buildConfiguration.getEventDispatcher(), DESCRIPTION + blobDescriptor)) {
       RegistryClient registryClient =
-          RegistryClient.factory(
-                  buildConfiguration.getTargetImageRegistry(),
-                  buildConfiguration.getTargetImageRepository())
-              .setAllowHttp(buildConfiguration.getAllowHttp())
+          buildConfiguration
+              .newTargetImageRegistryClientFactory()
               .setAuthorization(NonBlockingSteps.get(authenticatePushStep))
               .newRegistryClient();
-      registryClient.setTimer(timer);
 
+      // check if the BLOB is available
       if (registryClient.checkBlob(blobDescriptor.getDigest()) != null) {
         buildConfiguration
-            .getBuildLogger()
-            .info("BLOB : " + blobDescriptor + " already exists on registry");
+            .getEventDispatcher()
+            .dispatch(LogEvent.info("BLOB : " + blobDescriptor + " already exists on registry"));
         return blobDescriptor;
       }
 
-      registryClient.pushBlob(blobDescriptor.getDigest(), blob);
+      // todo: leverage cross-repository mounts
+      registryClient.pushBlob(blobDescriptor.getDigest(), blob, null);
 
       return blobDescriptor;
     }

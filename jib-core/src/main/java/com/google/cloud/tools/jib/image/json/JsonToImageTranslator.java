@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Google LLC. All rights reserved.
+ * Copyright 2017 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -18,7 +18,6 @@ package com.google.cloud.tools.jib.image.json;
 
 import com.google.cloud.tools.jib.blob.BlobDescriptor;
 import com.google.cloud.tools.jib.configuration.Port;
-import com.google.cloud.tools.jib.configuration.Port.Protocol;
 import com.google.cloud.tools.jib.image.DescriptorDigest;
 import com.google.cloud.tools.jib.image.DigestOnlyLayer;
 import com.google.cloud.tools.jib.image.Image;
@@ -47,7 +46,17 @@ public class JsonToImageTranslator {
    *
    * <p>Example matches: 100, 1000/tcp, 2000/udp
    */
-  private static final Pattern portPattern = Pattern.compile("(\\d+)(?:/(tcp|udp))?");
+  private static final Pattern PORT_PATTERN =
+      Pattern.compile("(?<portNum>\\d+)(?:/(?<protocol>tcp|udp))?");
+
+  /**
+   * Pattern used for parsing environment variables in the format {@code NAME=VALUE}. {@code NAME}
+   * should not contain an '='.
+   *
+   * <p>Example matches: NAME=VALUE, A12345=$$$$$
+   */
+  @VisibleForTesting
+  static final Pattern ENVIRONMENT_PATTERN = Pattern.compile("(?<name>[^=]+)=(?<value>.*)");
 
   /**
    * Translates {@link V21ManifestTemplate} to {@link Image}.
@@ -100,6 +109,7 @@ public class JsonToImageTranslator {
     }
 
     List<DescriptorDigest> diffIds = containerConfigurationTemplate.getDiffIds();
+    List<HistoryEntry> historyObjects = containerConfigurationTemplate.getHistory();
 
     if (layers.size() != diffIds.size()) {
       throw new LayerCountMismatchException(
@@ -113,6 +123,9 @@ public class JsonToImageTranslator {
       DescriptorDigest diffId = diffIds.get(layerIndex);
 
       imageBuilder.addLayer(new ReferenceLayer(noDiffIdLayer.getBlobDescriptor(), diffId));
+    }
+    for (HistoryEntry historyObject : historyObjects) {
+      imageBuilder.addHistory(historyObject);
     }
 
     if (containerConfigurationTemplate.getCreated() != null) {
@@ -139,9 +152,16 @@ public class JsonToImageTranslator {
 
     if (containerConfigurationTemplate.getContainerEnvironment() != null) {
       for (String environmentVariable : containerConfigurationTemplate.getContainerEnvironment()) {
-        imageBuilder.addEnvironmentVariableDefinition(environmentVariable);
+        Matcher matcher = ENVIRONMENT_PATTERN.matcher(environmentVariable);
+        if (!matcher.matches()) {
+          throw new BadContainerConfigurationFormatException(
+              "Invalid environment variable definition: " + environmentVariable);
+        }
+        imageBuilder.addEnvironmentVariable(matcher.group("name"), matcher.group("value"));
       }
     }
+
+    imageBuilder.setWorkingDirectory(containerConfigurationTemplate.getContainerWorkingDir());
 
     return imageBuilder.build();
   }
@@ -162,15 +182,15 @@ public class JsonToImageTranslator {
     ImmutableList.Builder<Port> ports = new ImmutableList.Builder<>();
     for (Map.Entry<String, Map<?, ?>> entry : portMap.entrySet()) {
       String port = entry.getKey();
-      Matcher matcher = portPattern.matcher(port);
+      Matcher matcher = PORT_PATTERN.matcher(port);
       if (!matcher.matches()) {
         throw new BadContainerConfigurationFormatException(
             "Invalid port configuration: '" + port + "'.");
       }
 
-      int portNumber = Integer.parseInt(matcher.group(1));
-      String protocol = matcher.group(2);
-      ports.add(new Port(portNumber, Protocol.getFromString(protocol)));
+      int portNumber = Integer.parseInt(matcher.group("portNum"));
+      String protocol = matcher.group("protocol");
+      ports.add(Port.parseProtocol(portNumber, protocol));
     }
     return ports.build();
   }

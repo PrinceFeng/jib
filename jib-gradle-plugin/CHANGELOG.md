@@ -5,12 +5,87 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+### Changed
+
+- Removed deprecated `jib.jvmFlags`, `jib.mainClass`, `jib.args`, and `jib.format` in favor of the equivalents under `jib.container` ([#461](https://github.com/GoogleContainerTools/jib/issues/461))
+- `jibExportDockerContext` generates different directory layout and `Dockerfile`.
+
+### Fixed
+
+## 0.9.11
+
+### Added
+
+- `container.environment` configuration parameter to configure environment variables ([#890](https://github.com/GoogleContainerTools/jib/issues/890))
+- `container.appRoot` configuration parameter to configure app root in the image ([#984](https://github.com/GoogleContainerTools/jib/pull/984))
+- `jib.to.tags` (list) defines additional tags to push to ([#978](https://github.com/GoogleContainerTools/jib/pull/978))
+
+### Fixed
+
+- Keep duplicate layers to match container history ([#1017](https://github.com/GoogleContainerTools/jib/pull/1017))
+
+## 0.9.10
+
+### Added
+
+- `container.labels` configuration parameter for configuring labels ([#751](https://github.com/GoogleContainerTools/jib/issues/751))
+- `container.entrypoint` configuration parameter to set the entrypoint ([#579](https://github.com/GoogleContainerTools/jib/issues/579))
+- `history` to layer metadata ([#875](https://github.com/GoogleContainerTools/jib/issues/875))
+- Propagates working directory from the base image ([#902](https://github.com/GoogleContainerTools/jib/pull/902))
+
+### Fixed
+
+- Corrects permissions for directories in the container filesystem ([#772](https://github.com/GoogleContainerTools/jib/pull/772))
+
+## 0.9.9
+
+### Added
+
+- Passthrough labels from base image ([#750](https://github.com/GoogleContainerTools/jib/pull/750/files))
+
+### Changed
+
+- Reordered classpath in entrypoint to use _resources_, _classes_, and then _dependencies_, to allow dependency patching
+  ([#777](https://github.com/GoogleContainerTools/jib/issues/777)).  Note that this classpath ordering differs from that used by Gradle's `run` task.
+- Changed logging level of missing build output directory message ([#677](https://github.com/GoogleContainerTools/jib/issues/677))
+
+### Fixed
+
+- Gradle project dependencies have their `assemble` task run before running a jib task ([#815](https://github.com/GoogleContainerTools/jib/issues/815))
+
+## 0.9.8
+
+### Added
+
+- Docker context generation now includes snapshot dependencies and extra files ([#516](https://github.com/GoogleContainerTools/jib/pull/516/files))
+- Disable parallel operation by setting the `jibSerialize` system property to `true` ([#682](https://github.com/GoogleContainerTools/jib/pull/682))
+
+### Changed
+
+- Propagates environment variables from the base image ([#716](https://github.com/GoogleContainerTools/jib/pull/716))
+- `allowInsecureRegistries` allows connecting to insecure HTTPS registries (for example, registries using self-signed certificates) ([#733](https://github.com/GoogleContainerTools/jib/pull/733))
+
+### Fixed
+
+- Slow image reference parsing ([#680](https://github.com/GoogleContainerTools/jib/pull/680))
+- Building empty layers ([#516](https://github.com/GoogleContainerTools/jib/pull/516/files))
+- Duplicate layer entries causing unbounded cache growth ([#721](https://github.com/GoogleContainerTools/jib/issues/721))
+- Incorrect authentication error message when target and base registry are the same ([#758](https://github.com/GoogleContainerTools/jib/issues/758))
+
+## 0.9.7
+
+### Added
+
 - Snapshot dependencies are added as their own layer ([#584](https://github.com/GoogleContainerTools/jib/pull/584))
 - `jibBuildTar` task to build an image tarball at `build/jib-image.tar`, which can be loaded into docker using `docker load` ([#514](https://github.com/GoogleContainerTools/jib/issues/514))
 - `container.useCurrentTimestamp` parameter to set the image creation time to the build time ([#413](https://github.com/GoogleContainerTools/jib/issues/413))
 - Authentication over HTTP using the `sendCredentialsOverHttp` system property ([#599](https://github.com/GoogleContainerTools/jib/issues/599))
+- HTTP connection and read timeouts for registry interactions configurable with the `jib.httpTimeout` system property ([#656](https://github.com/GoogleContainerTools/jib/pull/656))
+- Docker context export command-line option `--targetDir` to `--jibTargetDir` ([#662](https://github.com/GoogleContainerTools/jib/issues/662))
 
 ### Changed
+
+- Docker context export command-line option `--targetDir` to `--jibTargetDir` ([#662](https://github.com/GoogleContainerTools/jib/issues/662))
 
 ### Fixed
 

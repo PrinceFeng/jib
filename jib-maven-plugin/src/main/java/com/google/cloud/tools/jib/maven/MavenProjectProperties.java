@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,41 +16,59 @@
 
 package com.google.cloud.tools.jib.maven;
 
-import com.google.cloud.tools.jib.builder.BuildLogger;
-import com.google.cloud.tools.jib.builder.SourceFilesConfiguration;
-import com.google.cloud.tools.jib.frontend.HelpfulSuggestions;
-import com.google.cloud.tools.jib.frontend.MainClassFinder;
-import com.google.cloud.tools.jib.frontend.MainClassInferenceException;
-import com.google.cloud.tools.jib.frontend.ProjectProperties;
-import com.google.cloud.tools.jib.image.ImageReference;
+import com.google.cloud.tools.jib.event.DefaultEventDispatcher;
+import com.google.cloud.tools.jib.event.EventDispatcher;
+import com.google.cloud.tools.jib.event.EventHandlers;
+import com.google.cloud.tools.jib.event.JibEventType;
+import com.google.cloud.tools.jib.filesystem.AbsoluteUnixPath;
+import com.google.cloud.tools.jib.frontend.JavaLayerConfigurations;
+import com.google.cloud.tools.jib.plugins.common.MainClassInferenceException;
+import com.google.cloud.tools.jib.plugins.common.MainClassResolver;
+import com.google.cloud.tools.jib.plugins.common.ProjectProperties;
+import com.google.cloud.tools.jib.plugins.common.TimerEventHandler;
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Strings;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import javax.annotation.Nullable;
 import org.apache.maven.model.Plugin;
 import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.plugin.logging.Log;
 import org.apache.maven.project.MavenProject;
 import org.codehaus.plexus.util.xml.Xpp3Dom;
 
 /** Obtains information about a {@link MavenProject}. */
-class MavenProjectProperties implements ProjectProperties {
+public class MavenProjectProperties implements ProjectProperties {
 
-  private static final String PLUGIN_NAME = "jib-maven-plugin";
+  /** Used for logging during main class inference and analysis of user configuration. */
+  public static final String PLUGIN_NAME = "jib-maven-plugin";
+
+  /** Used to identify this plugin when interacting with the maven system. */
+  public static final String PLUGIN_KEY = "com.google.cloud.tools:" + PLUGIN_NAME;
+
+  /** Used to generate the User-Agent header and history metadata. */
+  static final String TOOL_NAME = "jib-maven-plugin";
+
+  /** Used for logging during main class inference. */
   private static final String JAR_PLUGIN_NAME = "'maven-jar-plugin'";
 
   /**
    * @param project the {@link MavenProject} for the plugin.
-   * @param mavenBuildLogger the logger used for printing status messages.
+   * @param log the Maven {@link Log} to log messages during Jib execution
+   * @param extraDirectory path to the directory for the extra files layer
+   * @param appRoot root directory in the image where the app will be placed
    * @return a MavenProjectProperties from the given project and logger.
    * @throws MojoExecutionException if no class files are found in the output directory.
    */
   static MavenProjectProperties getForProject(
-      MavenProject project, MavenBuildLogger mavenBuildLogger) throws MojoExecutionException {
+      MavenProject project, Log log, Path extraDirectory, AbsoluteUnixPath appRoot)
+      throws MojoExecutionException {
     try {
       return new MavenProjectProperties(
-          project, mavenBuildLogger, MavenSourceFilesConfiguration.getForProject(project));
+          project,
+          makeEventDispatcher(log),
+          MavenLayerConfigurations.getForProject(project, extraDirectory, appRoot));
+
     } catch (IOException ex) {
       throw new MojoExecutionException(
           "Obtaining project build output files failed; make sure you have compiled your project "
@@ -60,33 +78,35 @@ class MavenProjectProperties implements ProjectProperties {
     }
   }
 
+  private static EventDispatcher makeEventDispatcher(Log log) {
+    return new DefaultEventDispatcher(
+        new EventHandlers()
+            .add(JibEventType.LOGGING, new LogEventHandler(log))
+            .add(JibEventType.TIMING, new TimerEventHandler(log::debug)));
+  }
+
   private final MavenProject project;
-  private final MavenBuildLogger mavenBuildLogger;
-  private final SourceFilesConfiguration sourceFilesConfiguration;
+  private final EventDispatcher eventDispatcher;
+  private final JavaLayerConfigurations javaLayerConfigurations;
 
   @VisibleForTesting
   MavenProjectProperties(
       MavenProject project,
-      MavenBuildLogger mavenBuildLogger,
-      SourceFilesConfiguration sourceFilesConfiguration) {
+      EventDispatcher eventDispatcher,
+      JavaLayerConfigurations javaLayerConfigurations) {
     this.project = project;
-    this.mavenBuildLogger = mavenBuildLogger;
-    this.sourceFilesConfiguration = sourceFilesConfiguration;
+    this.eventDispatcher = eventDispatcher;
+    this.javaLayerConfigurations = javaLayerConfigurations;
   }
 
   @Override
-  public SourceFilesConfiguration getSourceFilesConfiguration() {
-    return sourceFilesConfiguration;
+  public JavaLayerConfigurations getJavaLayerConfigurations() {
+    return javaLayerConfigurations;
   }
 
   @Override
-  public HelpfulSuggestions getMainClassHelpfulSuggestions(String prefix) {
-    return HelpfulSuggestionsProvider.get(prefix);
-  }
-
-  @Override
-  public BuildLogger getLogger() {
-    return mavenBuildLogger;
+  public EventDispatcher getEventDispatcher() {
+    return eventDispatcher;
   }
 
   @Override
@@ -130,6 +150,11 @@ class MavenProjectProperties implements ProjectProperties {
     return JAR_PLUGIN_NAME;
   }
 
+  @Override
+  public boolean isWarProject() {
+    return false; // TODO: to be implemented. For now, assume false.
+  }
+
   /**
    * Tries to resolve the main class.
    *
@@ -139,36 +164,9 @@ class MavenProjectProperties implements ProjectProperties {
    */
   String getMainClass(JibPluginConfiguration jibPluginConfiguration) throws MojoExecutionException {
     try {
-      return MainClassFinder.resolveMainClass(jibPluginConfiguration.getMainClass(), this);
+      return MainClassResolver.resolveMainClass(jibPluginConfiguration.getMainClass(), this);
     } catch (MainClassInferenceException ex) {
       throw new MojoExecutionException(ex.getMessage(), ex);
-    }
-  }
-
-  /**
-   * Returns an {@link ImageReference} parsed from the configured target image, or one of the form
-   * {@code project-name:project-version} if target image is not configured
-   *
-   * @param targetImage the configured target image reference (can be empty)
-   * @param mavenBuildLogger the logger used to notify users of the target image parameter
-   * @return an {@link ImageReference} parsed from the configured target image, or one of the form
-   *     {@code project-name:project-version} if target image is not configured
-   */
-  ImageReference getGeneratedTargetDockerTag(
-      @Nullable String targetImage, MavenBuildLogger mavenBuildLogger) {
-    if (Strings.isNullOrEmpty(targetImage)) {
-      // TODO: Validate that project name and version are valid repository/tag
-      // TODO: Use HelpfulSuggestions
-      mavenBuildLogger.lifecycle(
-          "Tagging image with generated image reference "
-              + project.getName()
-              + ":"
-              + project.getVersion()
-              + ". If you'd like to specify a different tag, you can set the <to><image> parameter "
-              + "in your pom.xml, or use the -Dimage=<MY IMAGE> commandline flag.");
-      return ImageReference.of(null, project.getName(), project.getVersion());
-    } else {
-      return JibPluginConfiguration.parseImageReference(targetImage, "to");
     }
   }
 }

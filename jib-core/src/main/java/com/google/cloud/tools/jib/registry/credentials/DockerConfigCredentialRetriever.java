@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,17 +16,18 @@
 
 package com.google.cloud.tools.jib.registry.credentials;
 
-import com.google.cloud.tools.jib.http.Authorization;
-import com.google.cloud.tools.jib.http.Authorizations;
+import com.google.api.client.util.Base64;
+import com.google.cloud.tools.jib.configuration.credentials.Credential;
 import com.google.cloud.tools.jib.json.JsonTemplateMapper;
 import com.google.cloud.tools.jib.registry.RegistryAliasGroup;
 import com.google.cloud.tools.jib.registry.credentials.json.DockerConfigTemplate;
 import com.google.common.annotations.VisibleForTesting;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import javax.annotation.Nullable;
+import java.util.Optional;
 
 /**
  * Retrieves registry credentials from the Docker config.
@@ -53,87 +54,68 @@ public class DockerConfigCredentialRetriever {
 
   private final String registry;
   private final Path dockerConfigFile;
-  private final DockerCredentialHelperFactory dockerCredentialHelperFactory;
 
   public DockerConfigCredentialRetriever(String registry) {
     this(registry, DOCKER_CONFIG_FILE);
   }
 
   @VisibleForTesting
-  DockerConfigCredentialRetriever(String registry, Path dockerConfigFile) {
+  public DockerConfigCredentialRetriever(String registry, Path dockerConfigFile) {
     this.registry = registry;
     this.dockerConfigFile = dockerConfigFile;
-    this.dockerCredentialHelperFactory = new DockerCredentialHelperFactory(registry);
-  }
-
-  @VisibleForTesting
-  DockerConfigCredentialRetriever(
-      String registry,
-      Path dockerConfigFile,
-      DockerCredentialHelperFactory dockerCredentialHelperFactory) {
-    this.registry = registry;
-    this.dockerConfigFile = dockerConfigFile;
-    this.dockerCredentialHelperFactory = dockerCredentialHelperFactory;
   }
 
   /**
-   * @return {@link Authorization} found for {@code registry}, or {@code null} if not found
-   * @throws IOException if failed to parse the config JSON
-   */
-  @Nullable
-  public Authorization retrieve() throws IOException {
-    DockerConfigTemplate dockerConfigTemplate = loadDockerConfigTemplate();
-    if (dockerConfigTemplate == null) {
-      return null;
-    }
-
-    for (String registry : RegistryAliasGroup.getAliasesGroup(registry)) {
-      Authorization authorization = retrieve(dockerConfigTemplate, registry);
-      if (authorization != null) {
-        return authorization;
-      }
-    }
-    return null;
-  }
-
-  @Nullable
-  private Authorization retrieve(DockerConfigTemplate dockerConfigTemplate, String registry) {
-    // First, tries to find defined auth.
-    String auth = dockerConfigTemplate.getAuthFor(registry);
-    if (auth != null) {
-      return Authorizations.withBasicToken(auth);
-    }
-
-    // Then, tries to use a defined credHelpers credential helper.
-    String credentialHelperSuffix = dockerConfigTemplate.getCredentialHelperFor(registry);
-    if (credentialHelperSuffix != null) {
-      try {
-        return dockerCredentialHelperFactory
-            .withCredentialHelperSuffix(credentialHelperSuffix)
-            .retrieve();
-
-      } catch (IOException
-          | NonexistentServerUrlDockerCredentialHelperException
-          | NonexistentDockerCredentialHelperException ex) {
-        // Ignores credential helper retrieval exceptions.
-      }
-    }
-
-    return null;
-  }
-
-  /**
-   * Loads the Docker config JSON and caches it.
+   * Retrieves credentials for a registry. Tries all possible known aliases.
    *
+   * @return {@link Credential} found for {@code registry}, or {@link Optional#empty} if not found
    * @throws IOException if failed to parse the config JSON
    */
-  @Nullable
-  private DockerConfigTemplate loadDockerConfigTemplate() throws IOException {
-    // Loads the Docker config.
+  public Optional<Credential> retrieve() throws IOException {
     if (!Files.exists(dockerConfigFile)) {
-      return null;
+      return Optional.empty();
     }
+    DockerConfig dockerConfig =
+        new DockerConfig(
+            JsonTemplateMapper.readJsonFromFile(dockerConfigFile, DockerConfigTemplate.class));
+    return retrieve(dockerConfig);
+  }
 
-    return JsonTemplateMapper.readJsonFromFile(dockerConfigFile, DockerConfigTemplate.class);
+  /**
+   * Retrieves credentials for a registry alias from a {@link DockerConfig}.
+   *
+   * @param dockerConfig the {@link DockerConfig} to retrieve from
+   * @return the retrieved credentials, or {@code Optional#empty} if none are found
+   */
+  @VisibleForTesting
+  Optional<Credential> retrieve(DockerConfig dockerConfig) {
+    for (String registryAlias : RegistryAliasGroup.getAliasesGroup(registry)) {
+      // First, tries to find defined auth.
+      String auth = dockerConfig.getAuthFor(registryAlias);
+      if (auth != null) {
+        // 'auth' is a basic authentication token that should be parsed back into credentials
+        String usernameColonPassword =
+            new String(Base64.decodeBase64(auth), StandardCharsets.UTF_8);
+        String username = usernameColonPassword.substring(0, usernameColonPassword.indexOf(":"));
+        String password = usernameColonPassword.substring(usernameColonPassword.indexOf(":") + 1);
+        return Optional.of(Credential.basic(username, password));
+      }
+
+      // Then, tries to use a defined credHelpers credential helper.
+      DockerCredentialHelper dockerCredentialHelper =
+          dockerConfig.getCredentialHelperFor(registryAlias);
+      if (dockerCredentialHelper != null) {
+        try {
+          // Tries with the given registry alias (may be the original registry).
+          return Optional.of(dockerCredentialHelper.retrieve());
+
+        } catch (IOException
+            | CredentialHelperUnhandledServerUrlException
+            | CredentialHelperNotFoundException ex) {
+          // Ignores credential helper retrieval exceptions.
+        }
+      }
+    }
+    return Optional.empty();
   }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Google LLC. All rights reserved.
+ * Copyright 2017 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -18,7 +18,6 @@ package com.google.cloud.tools.jib.image.json;
 
 import com.google.cloud.tools.jib.blob.BlobDescriptor;
 import com.google.cloud.tools.jib.configuration.Port;
-import com.google.cloud.tools.jib.configuration.Port.Protocol;
 import com.google.cloud.tools.jib.image.DescriptorDigest;
 import com.google.cloud.tools.jib.image.Image;
 import com.google.cloud.tools.jib.image.Layer;
@@ -37,6 +36,7 @@ import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -88,11 +88,7 @@ public class JsonToImageTranslatorTest {
             ImmutableMap.of(),
             "3000/udp",
             ImmutableMap.of());
-    ImmutableList<Port> expected =
-        ImmutableList.of(
-            new Port(1000, Protocol.TCP),
-            new Port(2000, Protocol.TCP),
-            new Port(3000, Protocol.UDP));
+    ImmutableList<Port> expected = ImmutableList.of(Port.tcp(1000), Port.tcp(2000), Port.udp(3000));
     Assert.assertEquals(expected, JsonToImageTranslator.portMapToList(input));
 
     ImmutableList<Map<String, Map<?, ?>>> badInputs =
@@ -108,6 +104,31 @@ public class JsonToImageTranslatorTest {
       } catch (BadContainerConfigurationFormatException ignored) {
       }
     }
+  }
+
+  @Test
+  public void testJsonToImageTranslatorRegex() {
+    assertGoodEnvironmentPattern("NAME=VALUE", "NAME", "VALUE");
+    assertGoodEnvironmentPattern("A1203921=www=ww", "A1203921", "www=ww");
+    assertGoodEnvironmentPattern("&*%(&#$(*@(%&@$*$(=", "&*%(&#$(*@(%&@$*$(", "");
+    assertGoodEnvironmentPattern("m_a_8943=100", "m_a_8943", "100");
+    assertGoodEnvironmentPattern("A_B_C_D=*****", "A_B_C_D", "*****");
+
+    assertBadEnvironmentPattern("=================");
+    assertBadEnvironmentPattern("A_B_C");
+  }
+
+  private void assertGoodEnvironmentPattern(
+      String input, String expectedName, String expectedValue) {
+    Matcher matcher = JsonToImageTranslator.ENVIRONMENT_PATTERN.matcher(input);
+    Assert.assertTrue(matcher.matches());
+    Assert.assertEquals(expectedName, matcher.group("name"));
+    Assert.assertEquals(expectedValue, matcher.group("value"));
+  }
+
+  private void assertBadEnvironmentPattern(String input) {
+    Matcher matcher = JsonToImageTranslator.ENVIRONMENT_PATTERN.matcher(input);
+    Assert.assertFalse(matcher.matches());
   }
 
   private <T extends BuildableManifestTemplate> void testToImage_buildable(
@@ -142,14 +163,25 @@ public class JsonToImageTranslatorTest {
         DescriptorDigest.fromDigest(
             "sha256:8c662931926fa990b41da3c9f42663a537ccd498130030f9149173a0493832ad"),
         layers.get(0).getDiffId());
-    Assert.assertEquals(Instant.ofEpochSecond(20), image.getCreated());
-    Assert.assertEquals(Arrays.asList("some", "entrypoint", "command"), image.getEntrypoint());
-    Assert.assertEquals(Arrays.asList("VAR1=VAL1", "VAR2=VAL2"), image.getEnvironment());
     Assert.assertEquals(
         ImmutableList.of(
-            new Port(1000, Protocol.TCP),
-            new Port(2000, Protocol.TCP),
-            new Port(3000, Protocol.UDP)),
-        image.getExposedPorts());
+            HistoryEntry.builder()
+                .setCreationTimestamp(Instant.EPOCH)
+                .setAuthor("Bazel")
+                .setCreatedBy("bazel build ...")
+                .setEmptyLayer(true)
+                .build(),
+            HistoryEntry.builder()
+                .setCreationTimestamp(Instant.ofEpochSecond(20))
+                .setAuthor("Jib")
+                .setCreatedBy("jib")
+                .build()),
+        image.getHistory());
+    Assert.assertEquals(Instant.ofEpochSecond(20), image.getCreated());
+    Assert.assertEquals(Arrays.asList("some", "entrypoint", "command"), image.getEntrypoint());
+    Assert.assertEquals(ImmutableMap.of("VAR1", "VAL1", "VAR2", "VAL2"), image.getEnvironment());
+    Assert.assertEquals("/some/workspace", image.getWorkingDirectory());
+    Assert.assertEquals(
+        ImmutableList.of(Port.tcp(1000), Port.tcp(2000), Port.udp(3000)), image.getExposedPorts());
   }
 }

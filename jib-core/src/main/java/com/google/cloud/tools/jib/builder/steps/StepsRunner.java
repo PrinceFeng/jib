@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -17,22 +17,17 @@
 package com.google.cloud.tools.jib.builder.steps;
 
 import com.google.cloud.tools.jib.async.AsyncSteps;
-import com.google.cloud.tools.jib.async.NonBlockingSteps;
-import com.google.cloud.tools.jib.builder.BuildConfiguration;
-import com.google.cloud.tools.jib.builder.SourceFilesConfiguration;
-import com.google.cloud.tools.jib.cache.Cache;
-import com.google.cloud.tools.jib.cache.CachedLayer;
-import com.google.cloud.tools.jib.cache.CachedLayerWithMetadata;
+import com.google.cloud.tools.jib.configuration.BuildConfiguration;
+import com.google.cloud.tools.jib.global.JibSystemProperties;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.List;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import javax.annotation.Nullable;
 
@@ -44,12 +39,8 @@ import javax.annotation.Nullable;
  */
 public class StepsRunner {
 
-  private final ListeningExecutorService listeningExecutorService =
-      MoreExecutors.listeningDecorator(Executors.newCachedThreadPool());
+  private final ListeningExecutorService listeningExecutorService;
   private final BuildConfiguration buildConfiguration;
-  private final SourceFilesConfiguration sourceFilesConfiguration;
-  private final Cache baseLayersCache;
-  private final Cache applicationLayersCache;
 
   @Nullable private RetrieveRegistryCredentialsStep retrieveTargetRegistryCredentialsStep;
   @Nullable private AuthenticatePushStep authenticatePushStep;
@@ -67,15 +58,14 @@ public class StepsRunner {
   @Nullable private LoadDockerStep loadDockerStep;
   @Nullable private WriteTarFileStep writeTarFileStep;
 
-  public StepsRunner(
-      BuildConfiguration buildConfiguration,
-      SourceFilesConfiguration sourceFilesConfiguration,
-      Cache baseLayersCache,
-      Cache applicationLayersCache) {
+  public StepsRunner(BuildConfiguration buildConfiguration) {
     this.buildConfiguration = buildConfiguration;
-    this.sourceFilesConfiguration = sourceFilesConfiguration;
-    this.baseLayersCache = baseLayersCache;
-    this.applicationLayersCache = applicationLayersCache;
+
+    ExecutorService executorService =
+        JibSystemProperties.isSerializedExecutionEnabled()
+            ? MoreExecutors.newDirectExecutorService()
+            : Executors.newCachedThreadPool();
+    listeningExecutorService = MoreExecutors.listeningDecorator(executorService);
   }
 
   public StepsRunner runRetrieveTargetRegistryCredentialsStep() {
@@ -104,7 +94,6 @@ public class StepsRunner {
         new PullAndCacheBaseImageLayersStep(
             listeningExecutorService,
             buildConfiguration,
-            baseLayersCache,
             Preconditions.checkNotNull(pullBaseImageStep));
     return this;
   }
@@ -121,22 +110,18 @@ public class StepsRunner {
 
   public StepsRunner runBuildAndCacheApplicationLayerSteps() {
     buildAndCacheApplicationLayerSteps =
-        BuildAndCacheApplicationLayerStep.makeList(
-            listeningExecutorService,
-            buildConfiguration,
-            sourceFilesConfiguration,
-            applicationLayersCache);
+        BuildAndCacheApplicationLayerStep.makeList(listeningExecutorService, buildConfiguration);
     return this;
   }
 
-  public StepsRunner runBuildImageStep(ImmutableList<String> entrypoint) {
+  public StepsRunner runBuildImageStep() {
     buildImageStep =
         new BuildImageStep(
             listeningExecutorService,
             buildConfiguration,
+            Preconditions.checkNotNull(pullBaseImageStep),
             Preconditions.checkNotNull(pullAndCacheBaseImageLayersStep),
-            Preconditions.checkNotNull(buildAndCacheApplicationLayerSteps),
-            entrypoint);
+            Preconditions.checkNotNull(buildAndCacheApplicationLayerSteps));
     return this;
   }
 
@@ -226,37 +211,5 @@ public class StepsRunner {
 
   public void waitOnWriteTarFileStep() throws ExecutionException, InterruptedException {
     Preconditions.checkNotNull(writeTarFileStep).getFuture().get();
-  }
-
-  /**
-   * @return the layers cached by {@link #pullAndCacheBaseImageLayersStep}
-   * @throws ExecutionException if {@link #pullAndCacheBaseImageLayersStep} threw an exception
-   *     during execution
-   */
-  public List<CachedLayer> getCachedBaseImageLayers() throws ExecutionException {
-    ImmutableList<PullAndCacheBaseImageLayerStep> pullAndCacheBaseImageLayerSteps =
-        NonBlockingSteps.get(Preconditions.checkNotNull(pullAndCacheBaseImageLayersStep));
-
-    List<CachedLayer> cachedLayers = new ArrayList<>(pullAndCacheBaseImageLayerSteps.size());
-    for (PullAndCacheBaseImageLayerStep pullAndCacheBaseImageLayerStep :
-        pullAndCacheBaseImageLayerSteps) {
-      cachedLayers.add(NonBlockingSteps.get(pullAndCacheBaseImageLayerStep));
-    }
-    return cachedLayers;
-  }
-
-  /**
-   * @return the layers cached by {@link #buildAndCacheApplicationLayerSteps}
-   * @throws ExecutionException if {@link #buildAndCacheApplicationLayerSteps} threw an exception
-   *     during execution
-   */
-  public List<CachedLayerWithMetadata> getCachedApplicationLayers() throws ExecutionException {
-    List<CachedLayerWithMetadata> cachedLayersWithMetadata =
-        new ArrayList<>(Preconditions.checkNotNull(buildAndCacheApplicationLayerSteps).size());
-    for (BuildAndCacheApplicationLayerStep buildAndCacheApplicationLayerStep :
-        buildAndCacheApplicationLayerSteps) {
-      cachedLayersWithMetadata.add(NonBlockingSteps.get(buildAndCacheApplicationLayerStep));
-    }
-    return cachedLayersWithMetadata;
   }
 }

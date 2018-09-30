@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,27 +16,25 @@
 
 package com.google.cloud.tools.jib.builder.steps;
 
-import com.google.cloud.tools.jib.Timer;
 import com.google.cloud.tools.jib.async.AsyncStep;
-import com.google.cloud.tools.jib.builder.BuildConfiguration;
-import com.google.cloud.tools.jib.builder.SourceFilesConfiguration;
+import com.google.cloud.tools.jib.blob.Blob;
+import com.google.cloud.tools.jib.builder.TimerEventDispatcher;
 import com.google.cloud.tools.jib.cache.Cache;
-import com.google.cloud.tools.jib.cache.CacheMetadataCorruptedException;
-import com.google.cloud.tools.jib.cache.CacheReader;
-import com.google.cloud.tools.jib.cache.CacheWriter;
-import com.google.cloud.tools.jib.cache.CachedLayerWithMetadata;
+import com.google.cloud.tools.jib.cache.CacheCorruptedException;
+import com.google.cloud.tools.jib.cache.CacheEntry;
+import com.google.cloud.tools.jib.configuration.BuildConfiguration;
 import com.google.cloud.tools.jib.configuration.LayerConfiguration;
-import com.google.cloud.tools.jib.image.LayerEntry;
+import com.google.cloud.tools.jib.event.events.LogEvent;
 import com.google.cloud.tools.jib.image.ReproducibleLayerBuilder;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import java.io.IOException;
+import java.util.Optional;
 import java.util.concurrent.Callable;
 
 /** Builds and caches application layers. */
-class BuildAndCacheApplicationLayerStep
-    implements AsyncStep<CachedLayerWithMetadata>, Callable<CachedLayerWithMetadata> {
+class BuildAndCacheApplicationLayerStep implements AsyncStep<CacheEntry>, Callable<CacheEntry> {
 
   private static final String DESCRIPTION = "Building application layers";
 
@@ -45,130 +43,77 @@ class BuildAndCacheApplicationLayerStep
    * classes layers. Optionally adds an extra layer if configured to do so.
    */
   static ImmutableList<BuildAndCacheApplicationLayerStep> makeList(
-      ListeningExecutorService listeningExecutorService,
-      BuildConfiguration buildConfiguration,
-      SourceFilesConfiguration sourceFilesConfiguration,
-      Cache cache) {
-    try (Timer ignored = new Timer(buildConfiguration.getBuildLogger(), DESCRIPTION)) {
-      ImmutableList.Builder<BuildAndCacheApplicationLayerStep> buildLayerStepsBuilder =
-          ImmutableList.<BuildAndCacheApplicationLayerStep>builder()
-              .add(
-                  new BuildAndCacheApplicationLayerStep(
-                      "dependencies",
-                      listeningExecutorService,
-                      buildConfiguration,
-                      LayerConfiguration.builder()
-                          .addEntry(
-                              sourceFilesConfiguration.getDependenciesFiles(),
-                              sourceFilesConfiguration.getDependenciesPathOnImage())
-                          .build(),
-                      cache))
-              .add(
-                  new BuildAndCacheApplicationLayerStep(
-                      "resources",
-                      listeningExecutorService,
-                      buildConfiguration,
-                      LayerConfiguration.builder()
-                          .addEntry(
-                              sourceFilesConfiguration.getResourcesFiles(),
-                              sourceFilesConfiguration.getResourcesPathOnImage())
-                          .build(),
-                      cache))
-              .add(
-                  new BuildAndCacheApplicationLayerStep(
-                      "classes",
-                      listeningExecutorService,
-                      buildConfiguration,
-                      LayerConfiguration.builder()
-                          .addEntry(
-                              sourceFilesConfiguration.getClassesFiles(),
-                              sourceFilesConfiguration.getClassesPathOnImage())
-                          .build(),
-                      cache));
+      ListeningExecutorService listeningExecutorService, BuildConfiguration buildConfiguration) {
+    try (TimerEventDispatcher ignored =
+        new TimerEventDispatcher(buildConfiguration.getEventDispatcher(), DESCRIPTION)) {
+      ImmutableList.Builder<BuildAndCacheApplicationLayerStep> buildAndCacheApplicationLayerSteps =
+          ImmutableList.builderWithExpectedSize(buildConfiguration.getLayerConfigurations().size());
+      for (LayerConfiguration layerConfiguration : buildConfiguration.getLayerConfigurations()) {
+        // Skips the layer if empty.
+        if (layerConfiguration.getLayerEntries().isEmpty()) {
+          continue;
+        }
 
-      // Adds a snapshot dependencies layer, if snapshot files present.
-      if (!sourceFilesConfiguration.getSnapshotDependenciesFiles().isEmpty()) {
-        buildLayerStepsBuilder.add(
+        buildAndCacheApplicationLayerSteps.add(
             new BuildAndCacheApplicationLayerStep(
-                "snapshot-dependencies",
+                layerConfiguration.getName(),
                 listeningExecutorService,
                 buildConfiguration,
-                LayerConfiguration.builder()
-                    .addEntry(
-                        sourceFilesConfiguration.getSnapshotDependenciesFiles(),
-                        sourceFilesConfiguration.getDependenciesPathOnImage())
-                    .build(),
-                cache));
+                layerConfiguration));
       }
-      // Adds the extra layer to be built, if configured.
-      if (buildConfiguration.getExtraFilesLayerConfiguration() != null) {
-        buildLayerStepsBuilder.add(
-            new BuildAndCacheApplicationLayerStep(
-                "extra files",
-                listeningExecutorService,
-                buildConfiguration,
-                buildConfiguration.getExtraFilesLayerConfiguration(),
-                cache));
-      }
-
-      return buildLayerStepsBuilder.build();
+      return buildAndCacheApplicationLayerSteps.build();
     }
   }
 
   private final String layerType;
   private final BuildConfiguration buildConfiguration;
   private final LayerConfiguration layerConfiguration;
-  private final Cache cache;
 
-  private final ListenableFuture<CachedLayerWithMetadata> listenableFuture;
+  private final ListenableFuture<CacheEntry> listenableFuture;
 
   private BuildAndCacheApplicationLayerStep(
       String layerType,
       ListeningExecutorService listeningExecutorService,
       BuildConfiguration buildConfiguration,
-      LayerConfiguration layerConfiguration,
-      Cache cache) {
+      LayerConfiguration layerConfiguration) {
     this.layerType = layerType;
     this.buildConfiguration = buildConfiguration;
     this.layerConfiguration = layerConfiguration;
-    this.cache = cache;
 
     listenableFuture = listeningExecutorService.submit(this);
   }
 
   @Override
-  public ListenableFuture<CachedLayerWithMetadata> getFuture() {
+  public ListenableFuture<CacheEntry> getFuture() {
     return listenableFuture;
   }
 
   @Override
-  public CachedLayerWithMetadata call() throws IOException, CacheMetadataCorruptedException {
+  public CacheEntry call() throws IOException, CacheCorruptedException {
     String description = "Building " + layerType + " layer";
 
-    buildConfiguration.getBuildLogger().lifecycle(description + "...");
+    buildConfiguration.getEventDispatcher().dispatch(LogEvent.lifecycle(description + "..."));
 
-    try (Timer ignored = new Timer(buildConfiguration.getBuildLogger(), description)) {
+    try (TimerEventDispatcher ignored =
+        new TimerEventDispatcher(buildConfiguration.getEventDispatcher(), description)) {
+      Cache cache = buildConfiguration.getApplicationLayersCache();
+
       // Don't build the layer if it exists already.
-      CachedLayerWithMetadata cachedLayer =
-          new CacheReader(cache)
-              .getUpToDateLayerByLayerEntries(layerConfiguration.getLayerEntries());
-      if (cachedLayer != null) {
-        return cachedLayer;
+      Optional<CacheEntry> optionalCacheEntry =
+          cache.retrieve(layerConfiguration.getLayerEntries());
+      if (optionalCacheEntry.isPresent()) {
+        return optionalCacheEntry.get();
       }
 
-      ReproducibleLayerBuilder reproducibleLayerBuilder = new ReproducibleLayerBuilder();
-      for (LayerEntry layerEntry : layerConfiguration.getLayerEntries()) {
-        reproducibleLayerBuilder.addFiles(
-            layerEntry.getSourceFiles(), layerEntry.getExtractionPath());
-      }
-
-      cachedLayer = new CacheWriter(cache).writeLayer(reproducibleLayerBuilder);
+      Blob layerBlob = new ReproducibleLayerBuilder(layerConfiguration.getLayerEntries()).build();
+      CacheEntry cacheEntry =
+          cache.writeUncompressedLayer(layerBlob, layerConfiguration.getLayerEntries());
 
       buildConfiguration
-          .getBuildLogger()
-          .debug(description + " built " + cachedLayer.getBlobDescriptor().getDigest());
+          .getEventDispatcher()
+          .dispatch(LogEvent.debug(description + " built " + cacheEntry.getLayerDigest()));
 
-      return cachedLayer;
+      return cacheEntry;
     }
   }
 }

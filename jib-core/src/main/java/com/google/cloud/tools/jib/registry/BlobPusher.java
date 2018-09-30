@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -18,7 +18,6 @@ package com.google.cloud.tools.jib.registry;
 
 import com.google.api.client.http.GenericUrl;
 import com.google.api.client.http.HttpMethods;
-import com.google.api.client.http.HttpStatusCodes;
 import com.google.cloud.tools.jib.blob.Blob;
 import com.google.cloud.tools.jib.http.BlobHttpContent;
 import com.google.cloud.tools.jib.http.Response;
@@ -47,6 +46,7 @@ class BlobPusher {
   private final RegistryEndpointRequestProperties registryEndpointRequestProperties;
   private final DescriptorDigest blobDigest;
   private final Blob blob;
+  @Nullable private final String sourceRepository;
 
   /** Initializes the BLOB upload. */
   private class Initializer implements RegistryEndpointProvider<URL> {
@@ -70,7 +70,7 @@ class BlobPusher {
     @Override
     public URL handleResponse(Response response) throws RegistryErrorException {
       switch (response.getStatusCode()) {
-        case HttpStatusCodes.STATUS_CODE_CREATED:
+        case HttpURLConnection.HTTP_CREATED:
           // The BLOB exists in the registry.
           return null;
 
@@ -85,11 +85,15 @@ class BlobPusher {
 
     @Override
     public URL getApiRoute(String apiRouteBase) throws MalformedURLException {
-      return new URL(
-          apiRouteBase
-              + registryEndpointRequestProperties.getImageName()
-              + "/blobs/uploads/?mount="
-              + blobDigest);
+      StringBuilder url =
+          new StringBuilder(apiRouteBase)
+              .append(registryEndpointRequestProperties.getImageName())
+              .append("/blobs/uploads/");
+      if (sourceRepository != null) {
+        url.append("?mount=").append(blobDigest).append("&from=").append(sourceRepository);
+      }
+
+      return new URL(url.toString());
     }
 
     @Override
@@ -191,10 +195,12 @@ class BlobPusher {
   BlobPusher(
       RegistryEndpointRequestProperties registryEndpointRequestProperties,
       DescriptorDigest blobDigest,
-      Blob blob) {
+      Blob blob,
+      @Nullable String sourceRepository) {
     this.registryEndpointRequestProperties = registryEndpointRequestProperties;
     this.blobDigest = blobDigest;
     this.blob = blob;
+    this.sourceRepository = sourceRepository;
   }
 
   /**

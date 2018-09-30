@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Google LLC. All rights reserved.
+ * Copyright 2017 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -17,11 +17,16 @@
 package com.google.cloud.tools.jib.json;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.type.CollectionType;
 import com.google.cloud.tools.jib.blob.Blob;
 import com.google.cloud.tools.jib.blob.Blobs;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.channels.Channels;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.List;
 
 // TODO: Add JsonFactory for HTTP response parsing.
@@ -64,6 +69,25 @@ public class JsonTemplateMapper {
   }
 
   /**
+   * Deserializes a JSON file via a JSON object template with a shared lock on the file
+   *
+   * @param <T> child type of {@link JsonTemplate}
+   * @param jsonFile a file containing a JSON string
+   * @param templateClass the template to deserialize the string to
+   * @return the template filled with the values parsed from {@code jsonFile}
+   * @throws IOException if an error occurred during reading the file or parsing the JSON
+   */
+  public static <T extends JsonTemplate> T readJsonFromFileWithLock(
+      Path jsonFile, Class<T> templateClass) throws IOException {
+    // channel is closed by inputStream.close()
+    FileChannel channel = FileChannel.open(jsonFile, StandardOpenOption.READ);
+    channel.lock(0, Long.MAX_VALUE, true); // shared lock, released by channel close
+    try (InputStream inputStream = Channels.newInputStream(channel)) {
+      return objectMapper.readValue(inputStream, templateClass);
+    }
+  }
+
+  /**
    * Deserializes a JSON object from a JSON string.
    *
    * @param <T> child type of {@link JsonTemplate}
@@ -80,17 +104,17 @@ public class JsonTemplateMapper {
   /**
    * Deserializes a JSON object list from a JSON string.
    *
-   * @param <T> child type of {@link ListOfJsonTemplate}
+   * @param <T> child type of {@link JsonTemplate}
    * @param jsonString a JSON string
    * @param templateClass the template to deserialize the string to
-   * @return the template filled with the values parsed from {@code jsonFile}
+   * @return the template filled with the values parsed from {@code jsonString}
    * @throws IOException if an error occurred during parsing the JSON
    */
-  public static <T extends ListOfJsonTemplate> List<T> readListOfJson(
+  public static <T extends JsonTemplate> List<T> readListOfJson(
       String jsonString, Class<T> templateClass) throws IOException {
-    return objectMapper.readValue(
-        jsonString,
-        objectMapper.getTypeFactory().constructCollectionType(List.class, templateClass));
+    CollectionType listType =
+        objectMapper.getTypeFactory().constructCollectionType(List.class, templateClass);
+    return objectMapper.readValue(jsonString, listType);
   }
 
   /**
@@ -104,13 +128,13 @@ public class JsonTemplateMapper {
   }
 
   /**
-   * Convert a {@link ListOfJsonTemplate} to a {@link Blob} of the JSON string.
+   * Convert a list of {@link JsonTemplate} to a {@link Blob} of the JSON string.
    *
-   * @param template the list of JSON templates to convert
+   * @param templates the list of JSON templates to convert
    * @return a {@link Blob} of the JSON string
    */
-  public static Blob toBlob(ListOfJsonTemplate template) {
-    return toBlob(template.getList());
+  public static Blob toBlob(List<? extends JsonTemplate> templates) {
+    return toBlob((Object) templates);
   }
 
   private static Blob toBlob(Object template) {

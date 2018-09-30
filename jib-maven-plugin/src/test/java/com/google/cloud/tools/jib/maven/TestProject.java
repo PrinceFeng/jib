@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -25,23 +25,31 @@ import org.apache.maven.it.util.ResourceExtractor;
 import org.junit.rules.TemporaryFolder;
 
 /** Works with the test Maven projects in the {@code resources/projects} directory. */
-class TestProject extends TemporaryFolder implements Closeable {
+public class TestProject extends TemporaryFolder implements Closeable {
 
   private static final String PROJECTS_PATH_IN_RESOURCES = "/projects/";
 
   private final TestPlugin testPlugin;
   private final String projectDir;
+  private final String pomFilename;
 
   private Path projectRoot;
 
   /** Initialize to a specific project directory. */
-  TestProject(TestPlugin testPlugin, String projectDir) {
-    this.testPlugin = testPlugin;
-    this.projectDir = projectDir;
+  public TestProject(TestPlugin testPlugin, String projectDir) {
+    this(testPlugin, projectDir, "pom.xml");
   }
 
-  Path getProjectRoot() {
-    return projectRoot;
+  /** Initialize to a specific project directory with a non-default pom.xml. */
+  TestProject(TestPlugin testPlugin, String projectDir, String pomFilename) {
+    this.testPlugin = testPlugin;
+    this.projectDir = projectDir;
+    this.pomFilename = pomFilename;
+  }
+
+  /** Get the project root resolved as a real path */
+  public Path getProjectRoot() throws IOException {
+    return projectRoot.toRealPath();
   }
 
   @Override
@@ -58,7 +66,7 @@ class TestProject extends TemporaryFolder implements Closeable {
             .toPath();
 
     // Puts the correct plugin version into the test project pom.xml.
-    Path pomXml = projectRoot.resolve("pom.xml");
+    Path pomXml = projectRoot.resolve(pomFilename);
     Files.write(
         pomXml,
         new String(Files.readAllBytes(pomXml), StandardCharsets.UTF_8)

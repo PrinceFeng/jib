@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,12 +16,13 @@
 
 package com.google.cloud.tools.jib.registry.credentials;
 
-import com.google.cloud.tools.jib.http.Authorization;
+import com.google.cloud.tools.jib.configuration.credentials.Credential;
 import com.google.common.io.Resources;
 import java.io.IOException;
 import java.net.URISyntaxException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Optional;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
@@ -34,20 +35,19 @@ import org.mockito.junit.MockitoJUnitRunner;
 @RunWith(MockitoJUnitRunner.class)
 public class DockerConfigCredentialRetrieverTest {
 
-  @Mock private Authorization mockAuthorization;
-  @Mock private DockerCredentialHelper mockDockerCredentialHelper;
+  private static final Credential FAKE_CREDENTIAL = Credential.basic("username", "password");
 
-  @Mock private DockerCredentialHelperFactory mockDockerCredentialHelperFactory;
+  @Mock private DockerCredentialHelper mockDockerCredentialHelper;
+  @Mock private DockerConfig mockDockerConfig;
 
   private Path dockerConfigFile;
 
   @Before
   public void setUp()
-      throws URISyntaxException, NonexistentServerUrlDockerCredentialHelperException,
-          NonexistentDockerCredentialHelperException, IOException {
+      throws URISyntaxException, CredentialHelperUnhandledServerUrlException,
+          CredentialHelperNotFoundException, IOException {
     dockerConfigFile = Paths.get(Resources.getResource("json/dockerconfig.json").toURI());
-
-    Mockito.when(mockDockerCredentialHelper.retrieve()).thenReturn(mockAuthorization);
+    Mockito.when(mockDockerCredentialHelper.retrieve()).thenReturn(FAKE_CREDENTIAL);
   }
 
   @Test
@@ -55,60 +55,60 @@ public class DockerConfigCredentialRetrieverTest {
     DockerConfigCredentialRetriever dockerConfigCredentialRetriever =
         new DockerConfigCredentialRetriever("some registry", Paths.get("fake/path"));
 
-    Assert.assertNull(dockerConfigCredentialRetriever.retrieve());
+    Assert.assertFalse(dockerConfigCredentialRetriever.retrieve().isPresent());
   }
 
   @Test
   public void testRetrieve_hasAuth() throws IOException {
     DockerConfigCredentialRetriever dockerConfigCredentialRetriever =
-        new DockerConfigCredentialRetriever("some registry", dockerConfigFile, null);
+        new DockerConfigCredentialRetriever("some registry", dockerConfigFile);
 
-    Authorization authorization = dockerConfigCredentialRetriever.retrieve();
-    Assert.assertNotNull(authorization);
-    Assert.assertEquals("some auth", authorization.getToken());
+    Optional<Credential> credentials = dockerConfigCredentialRetriever.retrieve();
+    Assert.assertTrue(credentials.isPresent());
+    Assert.assertEquals("some", credentials.get().getUsername());
+    Assert.assertEquals("auth", credentials.get().getPassword());
   }
 
   @Test
-  public void testRetrieve_useCredsStore() throws IOException {
-    Mockito.when(
-            mockDockerCredentialHelperFactory.withCredentialHelperSuffix("some credential store"))
+  public void testRetrieve_useCredsStore() {
+    Mockito.when(mockDockerConfig.getCredentialHelperFor("just registry"))
         .thenReturn(mockDockerCredentialHelper);
-
     DockerConfigCredentialRetriever dockerConfigCredentialRetriever =
-        new DockerConfigCredentialRetriever(
-            "just registry", dockerConfigFile, mockDockerCredentialHelperFactory);
+        new DockerConfigCredentialRetriever("just registry", dockerConfigFile);
 
-    Authorization authorization = dockerConfigCredentialRetriever.retrieve();
-    Assert.assertEquals(mockAuthorization, authorization);
+    Assert.assertEquals(
+        FAKE_CREDENTIAL,
+        dockerConfigCredentialRetriever
+            .retrieve(mockDockerConfig)
+            .orElseThrow(AssertionError::new));
   }
 
   @Test
-  public void testRetrieve_useCredsStore_withProtocol() throws IOException {
-    Mockito.when(
-            mockDockerCredentialHelperFactory.withCredentialHelperSuffix("some credential store"))
+  public void testRetrieve_useCredsStore_withProtocol() {
+    Mockito.when(mockDockerConfig.getCredentialHelperFor("with.protocol"))
         .thenReturn(mockDockerCredentialHelper);
-
     DockerConfigCredentialRetriever dockerConfigCredentialRetriever =
-        new DockerConfigCredentialRetriever(
-            "with.protocol", dockerConfigFile, mockDockerCredentialHelperFactory);
+        new DockerConfigCredentialRetriever("with.protocol", dockerConfigFile);
 
-    Authorization authorization = dockerConfigCredentialRetriever.retrieve();
-    Assert.assertEquals(mockAuthorization, authorization);
+    Assert.assertEquals(
+        FAKE_CREDENTIAL,
+        dockerConfigCredentialRetriever
+            .retrieve(mockDockerConfig)
+            .orElseThrow(AssertionError::new));
   }
 
   @Test
-  public void testRetrieve_useCredHelper() throws IOException {
-    Mockito.when(
-            mockDockerCredentialHelperFactory.withCredentialHelperSuffix(
-                "another credential helper"))
+  public void testRetrieve_useCredHelper() {
+    Mockito.when(mockDockerConfig.getCredentialHelperFor("another registry"))
         .thenReturn(mockDockerCredentialHelper);
-
     DockerConfigCredentialRetriever dockerConfigCredentialRetriever =
-        new DockerConfigCredentialRetriever(
-            "another registry", dockerConfigFile, mockDockerCredentialHelperFactory);
+        new DockerConfigCredentialRetriever("another registry", dockerConfigFile);
 
-    Authorization authorization = dockerConfigCredentialRetriever.retrieve();
-    Assert.assertEquals(mockAuthorization, authorization);
+    Assert.assertEquals(
+        FAKE_CREDENTIAL,
+        dockerConfigCredentialRetriever
+            .retrieve(mockDockerConfig)
+            .orElseThrow(AssertionError::new));
   }
 
   @Test
@@ -116,24 +116,21 @@ public class DockerConfigCredentialRetrieverTest {
     DockerConfigCredentialRetriever dockerConfigCredentialRetriever =
         new DockerConfigCredentialRetriever("unknown registry", dockerConfigFile);
 
-    Assert.assertNull(dockerConfigCredentialRetriever.retrieve());
+    Assert.assertFalse(dockerConfigCredentialRetriever.retrieve().isPresent());
   }
 
   @Test
-  public void testRetrieve_credentialFromAlias() throws IOException {
-    Mockito.when(mockDockerCredentialHelperFactory.withCredentialHelperSuffix(Mockito.anyString()))
-        .thenReturn(Mockito.mock(DockerCredentialHelper.class));
-    Mockito.when(
-            mockDockerCredentialHelperFactory.withCredentialHelperSuffix(
-                "index.docker.io credential helper"))
+  public void testRetrieve_credentialFromAlias() {
+    Mockito.when(mockDockerConfig.getCredentialHelperFor("registry.hub.docker.com"))
         .thenReturn(mockDockerCredentialHelper);
-
     DockerConfigCredentialRetriever dockerConfigCredentialRetriever =
-        new DockerConfigCredentialRetriever(
-            "registry.hub.docker.com", dockerConfigFile, mockDockerCredentialHelperFactory);
+        new DockerConfigCredentialRetriever("registry.hub.docker.com", dockerConfigFile);
 
-    Authorization authorization = dockerConfigCredentialRetriever.retrieve();
-    Assert.assertEquals(mockAuthorization, authorization);
+    Assert.assertEquals(
+        FAKE_CREDENTIAL,
+        dockerConfigCredentialRetriever
+            .retrieve(mockDockerConfig)
+            .orElseThrow(AssertionError::new));
   }
 
   @Test
@@ -142,11 +139,12 @@ public class DockerConfigCredentialRetrieverTest {
         Paths.get(Resources.getResource("json/dockerconfig_index_docker_io_v1.json").toURI());
 
     DockerConfigCredentialRetriever dockerConfigCredentialRetriever =
-        new DockerConfigCredentialRetriever(
-            "index.docker.io", dockerConfigFile, mockDockerCredentialHelperFactory);
+        new DockerConfigCredentialRetriever("index.docker.io", dockerConfigFile);
 
-    Authorization authorization = dockerConfigCredentialRetriever.retrieve();
-    Assert.assertEquals("token for index.docker.io/v1/", authorization.getToken());
+    Optional<Credential> credentials = dockerConfigCredentialRetriever.retrieve();
+    Assert.assertTrue(credentials.isPresent());
+    Assert.assertEquals("token for", credentials.get().getUsername());
+    Assert.assertEquals(" index.docker.io/v1/", credentials.get().getPassword());
   }
 
   @Test
@@ -155,10 +153,11 @@ public class DockerConfigCredentialRetrieverTest {
         Paths.get(Resources.getResource("json/dockerconfig_index_docker_io_v1.json").toURI());
 
     DockerConfigCredentialRetriever dockerConfigCredentialRetriever =
-        new DockerConfigCredentialRetriever(
-            "registry.hub.docker.com", dockerConfigFile, mockDockerCredentialHelperFactory);
+        new DockerConfigCredentialRetriever("registry.hub.docker.com", dockerConfigFile);
 
-    Authorization authorization = dockerConfigCredentialRetriever.retrieve();
-    Assert.assertEquals("token for index.docker.io/v1/", authorization.getToken());
+    Optional<Credential> credentials = dockerConfigCredentialRetriever.retrieve();
+    Assert.assertTrue(credentials.isPresent());
+    Assert.assertEquals("token for", credentials.get().getUsername());
+    Assert.assertEquals(" index.docker.io/v1/", credentials.get().getPassword());
   }
 }

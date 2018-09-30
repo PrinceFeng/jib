@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -18,6 +18,7 @@ package com.test;
 
 import dependency.Greeting;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -43,6 +44,18 @@ public class HelloWorld {
       System.out.println(new String(Files.readAllBytes(Paths.get("/foo")), StandardCharsets.UTF_8));
       System.out.println(
           new String(Files.readAllBytes(Paths.get("/bar/cat")), StandardCharsets.UTF_8));
+    }
+
+    // Prints jvm flags
+    for (String jvmFlag : ManagementFactory.getRuntimeMXBean().getInputArguments()) {
+      System.out.println(jvmFlag);
+    }
+
+    if (System.getenv("env1") != null) {
+      System.out.println(System.getenv("env1"));
+    }
+    if (System.getenv("env2") != null) {
+      System.out.println(System.getenv("env2"));
     }
   }
 }

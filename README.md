@@ -1,9 +1,10 @@
-[![experimental](http://badges.github.io/stability-badges/dist/experimental.svg)](http://github.com/badges/stability-badges)
-[![Analytics](https://cloud-tools-for-java-metrics.appspot.com/UA-121724379-2/index)](https://github.com/igrigorik/ga-beacon)
-[![Maven Central](https://maven-badges.herokuapp.com/maven-central/com.google.cloud.tools/jib-maven-plugin/badge.svg)](https://maven-badges.herokuapp.com/maven-central/com.google.cloud.tools/jib-maven-plugin)
-[![Gradle Plugin Portal](https://img.shields.io/badge/gradle%20plugin-v0.9.6-blue.svg)](https://plugins.gradle.org/plugin/com.google.cloud.tools.jib)
+![beta](https://img.shields.io/badge/stability-beta-darkorange.svg)
+[![Maven Central](https://img.shields.io/maven-metadata/v/http/central.maven.org/maven2/com/google/cloud/tools/jib-maven-plugin/maven-metadata.xml.svg?colorB=007ec6)](https://maven-badges.herokuapp.com/maven-central/com.google.cloud.tools/jib-maven-plugin)
+[![Gradle Plugin Portal](https://img.shields.io/maven-metadata/v/https/plugins.gradle.org/m2/com/google/cloud/tools/jib/com.google.cloud.tools.jib.gradle.plugin/maven-metadata.xml.svg?colorB=007ec6&label=gradle)](https://plugins.gradle.org/plugin/com.google.cloud.tools.jib)
+![Build Status](https://storage.googleapis.com/cloud-tools-for-java-kokoro-build-badges/jib-ubuntu-master-orb.svg)
+![Build Status](https://storage.googleapis.com/cloud-tools-for-java-kokoro-build-badges/jib-windows-master-orb.svg)
+![Build Status](https://storage.googleapis.com/cloud-tools-for-java-kokoro-build-badges/jib-macos-master-orb.svg)
 [![Gitter version](https://img.shields.io/gitter/room/gitterHQ/gitter.svg)](https://gitter.im/google/jib)
-[![Tweet](https://img.shields.io/twitter/url/http/shields.io.svg?style=social)](https://twitter.com/intent/tweet?text=Google%20container%20tool%20for%20dockerizing%20Java%20applications&url=https://github.com/GoogleContainerTools/jib&via=JibContainerBuilder&hashtags=java,docker,kubernetes,maven,gradle,microservices,jib)
 
 # Jib
 
@@ -17,6 +18,8 @@ Jib builds Docker and [OCI](https://github.com/opencontainers/image-spec) images
 [Gradle](https://gradle.org/): See documentation for [jib-gradle-plugin](jib-gradle-plugin).
 
 *Jib as a container-building library for Java is work-in-progress. [Watch for updates.](https://github.com/GoogleContainerTools/jib/issues/337)*
+
+For more information, check out the [official blog post](https://cloudplatform.googleblog.com/2018/07/introducing-jib-build-java-docker-images-better.html) or watch [this talk](https://www.youtube.com/watch?v=H6gR_Cv4yWI) ([slides](https://speakerdeck.com/coollog/build-containers-faster-with-jib-a-google-image-build-tool-for-java-applications)).
 
 ## Goals
 
@@ -38,13 +41,13 @@ See documentation for using [jib-gradle-plugin](jib-gradle-plugin#quickstart).
 
 ## How Jib Works
 
-Whereas traditionally a Java application is built as a single image layer with the application JAR, Jib's build strategy separates the Java application into multiple layers for more granular incremental builds. When you change your code, only your changes are rebuilt, not your entire application. These layers, by default, are layered on top of a [distroless](https://github.com/GoogleCloudPlatform/distroless) base image. For more information, check out the [official blog post](https://cloudplatform.googleblog.com/2018/07/introducing-jib-build-java-docker-images-better.html).
+Whereas traditionally a Java application is built as a single image layer with the application JAR, Jib's build strategy separates the Java application into multiple layers for more granular incremental builds. When you change your code, only your changes are rebuilt, not your entire application. These layers, by default, are layered on top of a [distroless](https://github.com/GoogleCloudPlatform/distroless) base image. For more information, check out the [official blog post](https://cloudplatform.googleblog.com/2018/07/introducing-jib-build-java-docker-images-better.html) or watch [this talk](https://www.youtube.com/watch?v=H6gR_Cv4yWI) ([slides](https://speakerdeck.com/coollog/build-containers-faster-with-jib-a-google-image-build-tool-for-java-applications)).
 
 See also [rules_docker](https://github.com/bazelbuild/rules_docker) for a similar existing container image build tool for the [Bazel build system](https://github.com/bazelbuild/bazel).
 
 ## Frequently Asked Questions (FAQ)
 
-See the [Frequently Asked Questions (FAQ) wiki page](/../../wiki/Frequently-Asked-Questions-(FAQ)).
+See the [Frequently Asked Questions (FAQ) page](docs/faq.md).
 
 ## Get involved with the community
 
@@ -60,3 +63,5 @@ We welcome contributions! Here's how you can contribute:
   * Join in on [discussion issues](https://github.com/GoogleContainerTools/jib/labels/discuss)
 <!--  * Read the [style guide] -->
 *Make sure to follow the [Code of Conduct](https://github.com/GoogleContainerTools/jib/blob/master/CODE_OF_CONDUCT.md) when contributing so we can foster an open and welcoming community.*
+
+[![Analytics](https://cloud-tools-for-java-metrics.appspot.com/UA-121724379-2/index)](https://github.com/igrigorik/ga-beacon)

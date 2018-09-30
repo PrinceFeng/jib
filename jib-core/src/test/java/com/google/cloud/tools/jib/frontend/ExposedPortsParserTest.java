@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,24 +16,16 @@
 
 package com.google.cloud.tools.jib.frontend;
 
-import com.google.cloud.tools.jib.builder.BuildLogger;
 import com.google.cloud.tools.jib.configuration.Port;
-import com.google.cloud.tools.jib.configuration.Port.Protocol;
 import com.google.common.collect.ImmutableList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import org.junit.Assert;
 import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.mockito.Mock;
-import org.mockito.junit.MockitoJUnitRunner;
 
 /** Tests for {@link ExposedPortsParser}. */
-@RunWith(MockitoJUnitRunner.class)
 public class ExposedPortsParserTest {
-
-  @Mock private BuildLogger mockLogger;
 
   @Test
   public void testParse() {
@@ -42,17 +34,17 @@ public class ExposedPortsParserTest {
     ImmutableList<Port> expected =
         new ImmutableList.Builder<Port>()
             .add(
-                new Port(1000, Protocol.TCP),
-                new Port(2000, Protocol.TCP),
-                new Port(2001, Protocol.TCP),
-                new Port(2002, Protocol.TCP),
-                new Port(2003, Protocol.TCP),
-                new Port(3000, Protocol.TCP),
-                new Port(4000, Protocol.TCP),
-                new Port(5000, Protocol.UDP),
-                new Port(6000, Protocol.UDP),
-                new Port(6001, Protocol.UDP),
-                new Port(6002, Protocol.UDP))
+                Port.tcp(1000),
+                Port.tcp(2000),
+                Port.tcp(2001),
+                Port.tcp(2002),
+                Port.tcp(2003),
+                Port.tcp(3000),
+                Port.tcp(4000),
+                Port.udp(5000),
+                Port.udp(6000),
+                Port.udp(6001),
+                Port.udp(6002))
             .build();
     ImmutableList<Port> result = ExposedPortsParser.parse(goodInputs);
     Assert.assertEquals(expected, result);

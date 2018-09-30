@@ -16,17 +16,18 @@
 
 package com.google.cloud.tools.jib.gradle;
 
-import com.google.cloud.tools.jib.builder.BuildLogger;
-import com.google.cloud.tools.jib.builder.SourceFilesConfiguration;
-import com.google.cloud.tools.jib.frontend.HelpfulSuggestions;
-import com.google.cloud.tools.jib.frontend.MainClassFinder;
-import com.google.cloud.tools.jib.frontend.MainClassInferenceException;
-import com.google.cloud.tools.jib.frontend.ProjectProperties;
-import com.google.cloud.tools.jib.image.ImageReference;
-import com.google.cloud.tools.jib.image.InvalidImageReferenceException;
+import com.google.cloud.tools.jib.event.DefaultEventDispatcher;
+import com.google.cloud.tools.jib.event.EventDispatcher;
+import com.google.cloud.tools.jib.event.EventHandlers;
+import com.google.cloud.tools.jib.event.JibEventType;
+import com.google.cloud.tools.jib.event.events.LogEvent;
+import com.google.cloud.tools.jib.filesystem.AbsoluteUnixPath;
+import com.google.cloud.tools.jib.frontend.JavaLayerConfigurations;
+import com.google.cloud.tools.jib.plugins.common.MainClassInferenceException;
+import com.google.cloud.tools.jib.plugins.common.MainClassResolver;
+import com.google.cloud.tools.jib.plugins.common.ProjectProperties;
+import com.google.cloud.tools.jib.plugins.common.TimerEventHandler;
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
-import com.google.common.base.Strings;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -39,55 +40,79 @@ import org.gradle.api.GradleException;
 import org.gradle.api.Project;
 import org.gradle.api.Task;
 import org.gradle.api.file.FileCollection;
+import org.gradle.api.logging.Logger;
+import org.gradle.api.plugins.WarPluginConvention;
+import org.gradle.api.tasks.bundling.War;
 import org.gradle.jvm.tasks.Jar;
 
 /** Obtains information about a Gradle {@link Project} that uses Jib. */
 class GradleProjectProperties implements ProjectProperties {
 
+  /** Used to generate the User-Agent header and history metadata. */
+  static final String TOOL_NAME = "jib-gradle-plugin";
+
+  /** Used for logging during main class inference. */
   private static final String PLUGIN_NAME = "jib";
+
+  /** Used for logging during main class inference. */
   private static final String JAR_PLUGIN_NAME = "'jar' task";
 
   /** @return a GradleProjectProperties from the given project and logger. */
   static GradleProjectProperties getForProject(
-      Project project, GradleBuildLogger gradleBuildLogger) {
+      Project project, Logger logger, Path extraDirectory, AbsoluteUnixPath appRoot) {
     try {
       return new GradleProjectProperties(
           project,
-          gradleBuildLogger,
-          GradleSourceFilesConfiguration.getForProject(project, gradleBuildLogger));
+          makeEventDispatcher(logger),
+          GradleLayerConfigurations.getForProject(project, logger, extraDirectory, appRoot));
 
     } catch (IOException ex) {
       throw new GradleException("Obtaining project build output files failed", ex);
     }
   }
 
+  private static EventDispatcher makeEventDispatcher(Logger logger) {
+    LogEventHandler logEventHandler = new LogEventHandler(logger);
+    return new DefaultEventDispatcher(
+        new EventHandlers()
+            .add(JibEventType.LOGGING, logEventHandler)
+            .add(
+                JibEventType.TIMING,
+                new TimerEventHandler(message -> logEventHandler.accept(LogEvent.debug(message)))));
+  }
+
+  @Nullable
+  static War getWarTask(Project project) {
+    WarPluginConvention warPluginConvention =
+        project.getConvention().findPlugin(WarPluginConvention.class);
+    if (warPluginConvention == null) {
+      return null;
+    }
+    return (War) warPluginConvention.getProject().getTasks().findByName("war");
+  }
+
   private final Project project;
-  private final GradleBuildLogger gradleBuildLogger;
-  private final SourceFilesConfiguration sourceFilesConfiguration;
+  private final EventDispatcher eventDispatcher;
+  private final JavaLayerConfigurations javaLayerConfigurations;
 
   @VisibleForTesting
   GradleProjectProperties(
       Project project,
-      GradleBuildLogger gradleBuildLogger,
-      SourceFilesConfiguration sourceFilesConfiguration) {
+      EventDispatcher eventDispatcher,
+      JavaLayerConfigurations javaLayerConfigurations) {
     this.project = project;
-    this.gradleBuildLogger = gradleBuildLogger;
-    this.sourceFilesConfiguration = sourceFilesConfiguration;
+    this.eventDispatcher = eventDispatcher;
+    this.javaLayerConfigurations = javaLayerConfigurations;
   }
 
   @Override
-  public SourceFilesConfiguration getSourceFilesConfiguration() {
-    return sourceFilesConfiguration;
+  public JavaLayerConfigurations getJavaLayerConfigurations() {
+    return javaLayerConfigurations;
   }
 
   @Override
-  public HelpfulSuggestions getMainClassHelpfulSuggestions(String prefix) {
-    return HelpfulSuggestionsProvider.get(prefix);
-  }
-
-  @Override
-  public BuildLogger getLogger() {
-    return gradleBuildLogger;
+  public EventDispatcher getEventDispatcher() {
+    return eventDispatcher;
   }
 
   @Override
@@ -115,6 +140,12 @@ class GradleProjectProperties implements ProjectProperties {
     return JAR_PLUGIN_NAME;
   }
 
+  @Override
+  public boolean isWarProject() {
+    // TODO: replace with "getWarTask(project) != null" once ready
+    return false;
+  }
+
   /**
    * Tries to resolve the main class.
    *
@@ -122,38 +153,9 @@ class GradleProjectProperties implements ProjectProperties {
    */
   String getMainClass(JibExtension jibExtension) {
     try {
-      return MainClassFinder.resolveMainClass(jibExtension.getMainClass(), this);
+      return MainClassResolver.resolveMainClass(jibExtension.getContainer().getMainClass(), this);
     } catch (MainClassInferenceException ex) {
       throw new GradleException(ex.getMessage(), ex);
-    }
-  }
-
-  /**
-   * Returns an {@link ImageReference} parsed from the configured target image, or one of the form
-   * {@code project-name:project-version} if target image is not configured
-   *
-   * @param jibExtension the plugin configuration parameters to generate the name from
-   * @param gradleBuildLogger the logger used to notify users of the target image parameter
-   * @return an {@link ImageReference} parsed from the configured target image, or one of the form
-   *     {@code project-name:project-version} if target image is not configured
-   */
-  ImageReference getGeneratedTargetDockerTag(
-      JibExtension jibExtension, GradleBuildLogger gradleBuildLogger)
-      throws InvalidImageReferenceException {
-    Preconditions.checkNotNull(jibExtension);
-    if (Strings.isNullOrEmpty(jibExtension.getTargetImage())) {
-      // TODO: Validate that project name and version are valid repository/tag
-      // TODO: Use HelpfulSuggestions
-      gradleBuildLogger.lifecycle(
-          "Tagging image with generated image reference "
-              + project.getName()
-              + ":"
-              + project.getVersion().toString()
-              + ". If you'd like to specify a different tag, you can set the jib.to.image "
-              + "parameter in your build.gradle, or use the --image=<MY IMAGE> commandline flag.");
-      return ImageReference.of(null, project.getName(), project.getVersion().toString());
-    } else {
-      return ImageReference.parse(jibExtension.getTargetImage());
     }
   }
 

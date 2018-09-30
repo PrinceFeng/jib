@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Google LLC. All rights reserved.
+ * Copyright 2017 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -15,6 +15,8 @@
  */
 
 package com.google.cloud.tools.jib.http;
+
+import java.util.Objects;
 
 /**
  * Holds the credentials for an HTTP {@code Authorization} header.
@@ -45,5 +47,22 @@ public class Authorization {
   @Override
   public String toString() {
     return scheme + " " + token;
+  }
+
+  @Override
+  public boolean equals(Object other) {
+    if (this == other) {
+      return true;
+    }
+    if (!(other instanceof Authorization)) {
+      return false;
+    }
+    Authorization otherAuthorization = (Authorization) other;
+    return scheme.equals(otherAuthorization.scheme) && token.equals(otherAuthorization.token);
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(scheme, token);
   }
 }

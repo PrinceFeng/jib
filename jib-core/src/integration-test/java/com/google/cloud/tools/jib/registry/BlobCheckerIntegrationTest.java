@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,6 +16,7 @@
 
 package com.google.cloud.tools.jib.registry;
 
+import com.google.cloud.tools.jib.event.EventDispatcher;
 import com.google.cloud.tools.jib.image.DescriptorDigest;
 import com.google.cloud.tools.jib.image.json.V22ManifestTemplate;
 import java.io.IOException;
@@ -28,11 +29,15 @@ import org.junit.Test;
 public class BlobCheckerIntegrationTest {
 
   @ClassRule public static LocalRegistry localRegistry = new LocalRegistry(5000);
+  private static final EventDispatcher EVENT_DISPATCHER = jibEvent -> {};
 
   @Test
-  public void testCheck_exists() throws IOException, RegistryException {
+  public void testCheck_exists() throws IOException, RegistryException, InterruptedException {
+    localRegistry.pullAndPushToLocal("busybox", "busybox");
     RegistryClient registryClient =
-        RegistryClient.factory("localhost:5000", "busybox").setAllowHttp(true).newRegistryClient();
+        RegistryClient.factory(EVENT_DISPATCHER, "localhost:5000", "busybox")
+            .setAllowInsecureRegistries(true)
+            .newRegistryClient();
     V22ManifestTemplate manifestTemplate =
         registryClient.pullManifest("latest", V22ManifestTemplate.class);
     DescriptorDigest blobDigest = manifestTemplate.getLayers().get(0).getDigest();
@@ -41,13 +46,17 @@ public class BlobCheckerIntegrationTest {
   }
 
   @Test
-  public void testCheck_doesNotExist() throws IOException, RegistryException, DigestException {
+  public void testCheck_doesNotExist()
+      throws IOException, RegistryException, DigestException, InterruptedException {
+    localRegistry.pullAndPushToLocal("busybox", "busybox");
     RegistryClient registryClient =
-        RegistryClient.factory("localhost:5000", "busybox").setAllowHttp(true).newRegistryClient();
+        RegistryClient.factory(EVENT_DISPATCHER, "localhost:5000", "busybox")
+            .setAllowInsecureRegistries(true)
+            .newRegistryClient();
     DescriptorDigest fakeBlobDigest =
         DescriptorDigest.fromHash(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 
-    Assert.assertEquals(null, registryClient.checkBlob(fakeBlobDigest));
+    Assert.assertNull(registryClient.checkBlob(fakeBlobDigest));
   }
 }

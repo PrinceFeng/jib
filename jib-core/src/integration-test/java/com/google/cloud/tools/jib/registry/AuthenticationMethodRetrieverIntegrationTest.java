@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,6 +16,7 @@
 
 package com.google.cloud.tools.jib.registry;
 
+import com.google.cloud.tools.jib.event.EventDispatcher;
 import com.google.cloud.tools.jib.http.Authorization;
 import java.io.IOException;
 import org.junit.Assert;
@@ -24,17 +25,20 @@ import org.junit.Test;
 /** Integration tests for {@link AuthenticationMethodRetriever}. */
 public class AuthenticationMethodRetrieverIntegrationTest {
 
+  private static final EventDispatcher EVENT_DISPATCHER = jibEvent -> {};
+
   @Test
   public void testGetRegistryAuthenticator()
       throws RegistryAuthenticationFailedException, IOException, RegistryException {
     RegistryClient registryClient =
-        RegistryClient.factory("registry.hub.docker.com", "library/busybox").newRegistryClient();
+        RegistryClient.factory(EVENT_DISPATCHER, "registry.hub.docker.com", "library/busybox")
+            .newRegistryClient();
     RegistryAuthenticator registryAuthenticator = registryClient.getRegistryAuthenticator();
     Assert.assertNotNull(registryAuthenticator);
     Authorization authorization = registryAuthenticator.authenticatePull();
 
     RegistryClient authorizedRegistryClient =
-        RegistryClient.factory("registry.hub.docker.com", "library/busybox")
+        RegistryClient.factory(EVENT_DISPATCHER, "registry.hub.docker.com", "library/busybox")
             .setAuthorization(authorization)
             .newRegistryClient();
     authorizedRegistryClient.pullManifest("latest");

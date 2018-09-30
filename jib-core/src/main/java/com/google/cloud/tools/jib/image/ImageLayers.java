@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Google LLC. All rights reserved.
+ * Copyright 2017 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -18,36 +18,37 @@ package com.google.cloud.tools.jib.image;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Lists;
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 import javax.annotation.Nullable;
 
-/** Holds the layers for an image. Makes sure that each layer is only added once. */
+/** Holds the layers for an image. */
 public class ImageLayers<T extends Layer> implements Iterable<T> {
 
   public static class Builder<T extends Layer> {
 
-    private final ImmutableList.Builder<T> layersBuilder = ImmutableList.builder();
+    private final List<T> layers = new ArrayList<>();
     private final ImmutableSet.Builder<DescriptorDigest> layerDigestsBuilder =
         ImmutableSet.builder();
-
-    /** The last layer added. */
-    @Nullable private T lastLayer;
+    private boolean removeDuplicates = false;
 
     /**
-     * Adds a layer.
+     * Adds a layer. Removes any prior occurrences of the same layer.
+     *
+     * <p>Note that only subclasses of {@link Layer} that implement {@code equals/hashCode} will be
+     * guaranteed to not be duplicated.
      *
      * @param layer the layer to add
      * @return this
      * @throws LayerPropertyNotFoundException if adding the layer fails
      */
     public Builder<T> add(T layer) throws LayerPropertyNotFoundException {
-      // Doesn't add the layer if the last layer is the same.
-      if (!isSameAsLastLayer(layer)) {
-        layerDigestsBuilder.add(layer.getBlobDescriptor().getDigest());
-        layersBuilder.add(layer);
-        lastLayer = layer;
-      }
-
+      layerDigestsBuilder.add(layer.getBlobDescriptor().getDigest());
+      layers.add(layer);
       return this;
     }
 
@@ -67,21 +68,26 @@ public class ImageLayers<T extends Layer> implements Iterable<T> {
       return this;
     }
 
-    public ImageLayers<T> build() {
-      return new ImageLayers<>(layersBuilder.build(), layerDigestsBuilder.build());
+    /**
+     * Remove any duplicate layers, keeping the last occurrence of the layer.
+     *
+     * @return this
+     */
+    public Builder<T> removeDuplicates() {
+      removeDuplicates = true;
+      return this;
     }
 
-    /**
-     * @param layer the layer to compare
-     * @return {@code true} if {@code layer} is the same as the last layer in {@link #layers}
-     * @throws LayerPropertyNotFoundException if getting the last layer's blob descriptor fails
-     */
-    private boolean isSameAsLastLayer(T layer) throws LayerPropertyNotFoundException {
-      return lastLayer != null
-          && layer
-              .getBlobDescriptor()
-              .getDigest()
-              .equals(lastLayer.getBlobDescriptor().getDigest());
+    public ImageLayers<T> build() {
+      if (!removeDuplicates) {
+        return new ImageLayers<>(ImmutableList.copyOf(layers), layerDigestsBuilder.build());
+      }
+
+      // LinkedHashSet maintains the order but keeps the first occurrence. Keep last occurrence by
+      // adding elements in reverse, and then reversing the result
+      Set<T> dedupedButReversed = new LinkedHashSet<T>(Lists.reverse(this.layers));
+      ImmutableList<T> deduped = ImmutableList.copyOf(dedupedButReversed).reverse();
+      return new ImageLayers<>(deduped, layerDigestsBuilder.build());
     }
   }
 

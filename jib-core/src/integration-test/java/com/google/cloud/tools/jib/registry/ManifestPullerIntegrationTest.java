@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Google LLC. All rights reserved.
+ * Copyright 2017 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,6 +16,7 @@
 
 package com.google.cloud.tools.jib.registry;
 
+import com.google.cloud.tools.jib.event.EventDispatcher;
 import com.google.cloud.tools.jib.image.json.ManifestTemplate;
 import com.google.cloud.tools.jib.image.json.V21ManifestTemplate;
 import com.google.cloud.tools.jib.image.json.V22ManifestTemplate;
@@ -29,11 +30,15 @@ import org.junit.Test;
 public class ManifestPullerIntegrationTest {
 
   @ClassRule public static LocalRegistry localRegistry = new LocalRegistry(5000);
+  private static final EventDispatcher EVENT_DISPATCHER = jibEvent -> {};
 
   @Test
-  public void testPull_v21() throws IOException, RegistryException {
+  public void testPull_v21() throws IOException, RegistryException, InterruptedException {
+    localRegistry.pullAndPushToLocal("busybox", "busybox");
     RegistryClient registryClient =
-        RegistryClient.factory("localhost:5000", "busybox").setAllowHttp(true).newRegistryClient();
+        RegistryClient.factory(EVENT_DISPATCHER, "localhost:5000", "busybox")
+            .setAllowInsecureRegistries(true)
+            .newRegistryClient();
     V21ManifestTemplate manifestTemplate =
         registryClient.pullManifest("latest", V21ManifestTemplate.class);
 
@@ -42,9 +47,10 @@ public class ManifestPullerIntegrationTest {
   }
 
   @Test
-  public void testPull_v22() throws IOException, RegistryException {
+  public void testPull_v22() throws IOException, RegistryException, InterruptedException {
+    localRegistry.pullAndPushToLocal("busybox", "busybox");
     RegistryClient registryClient =
-        RegistryClient.factory("gcr.io", "distroless/java").newRegistryClient();
+        RegistryClient.factory(EVENT_DISPATCHER, "gcr.io", "distroless/java").newRegistryClient();
     ManifestTemplate manifestTemplate = registryClient.pullManifest("latest");
 
     Assert.assertEquals(2, manifestTemplate.getSchemaVersion());
@@ -53,11 +59,13 @@ public class ManifestPullerIntegrationTest {
   }
 
   @Test
-  public void testPull_unknownManifest() throws RegistryException, IOException {
+  public void testPull_unknownManifest()
+      throws RegistryException, IOException, InterruptedException {
+    localRegistry.pullAndPushToLocal("busybox", "busybox");
     try {
       RegistryClient registryClient =
-          RegistryClient.factory("localhost:5000", "busybox")
-              .setAllowHttp(true)
+          RegistryClient.factory(EVENT_DISPATCHER, "localhost:5000", "busybox")
+              .setAllowInsecureRegistries(true)
               .newRegistryClient();
       registryClient.pullManifest("nonexistent-tag");
       Assert.fail("Trying to pull nonexistent image should have errored");

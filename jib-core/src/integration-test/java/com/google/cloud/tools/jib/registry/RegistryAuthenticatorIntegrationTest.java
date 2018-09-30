@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 Google LLC. All rights reserved.
+ * Copyright 2017 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,6 +16,7 @@
 
 package com.google.cloud.tools.jib.registry;
 
+import com.google.cloud.tools.jib.event.EventDispatcher;
 import com.google.cloud.tools.jib.http.Authorization;
 import com.google.cloud.tools.jib.image.ImageReference;
 import com.google.cloud.tools.jib.image.InvalidImageReferenceException;
@@ -26,6 +27,8 @@ import org.junit.Test;
 /** Integration tests for {@link RegistryAuthenticator}. */
 public class RegistryAuthenticatorIntegrationTest {
 
+  private static final EventDispatcher EVENT_DISPATCHER = jibEvent -> {};
+
   @Test
   public void testAuthenticate()
       throws RegistryAuthenticationFailedException, InvalidImageReferenceException, IOException,
@@ -33,7 +36,9 @@ public class RegistryAuthenticatorIntegrationTest {
     ImageReference dockerHubImageReference = ImageReference.parse("library/busybox");
     RegistryAuthenticator registryAuthenticator =
         RegistryAuthenticator.initializer(
-                dockerHubImageReference.getRegistry(), dockerHubImageReference.getRepository())
+                EVENT_DISPATCHER,
+                dockerHubImageReference.getRegistry(),
+                dockerHubImageReference.getRepository())
             .initialize();
     Assert.assertNotNull(registryAuthenticator);
     Authorization authorization = registryAuthenticator.authenticatePull();

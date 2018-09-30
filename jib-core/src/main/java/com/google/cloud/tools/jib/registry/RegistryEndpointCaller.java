@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Google LLC. All rights reserved.
+ * Copyright 2018 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -19,6 +19,9 @@ package com.google.cloud.tools.jib.registry;
 import com.google.api.client.http.GenericUrl;
 import com.google.api.client.http.HttpResponseException;
 import com.google.api.client.http.HttpStatusCodes;
+import com.google.cloud.tools.jib.event.EventDispatcher;
+import com.google.cloud.tools.jib.event.events.LogEvent;
+import com.google.cloud.tools.jib.global.JibSystemProperties;
 import com.google.cloud.tools.jib.http.Authorization;
 import com.google.cloud.tools.jib.http.Connection;
 import com.google.cloud.tools.jib.http.Request;
@@ -30,6 +33,7 @@ import com.google.common.annotations.VisibleForTesting;
 import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.security.GeneralSecurityException;
 import java.util.function.Function;
 import javax.annotation.Nullable;
 import javax.net.ssl.SSLPeerUnverifiedException;
@@ -51,82 +55,79 @@ class RegistryEndpointCaller<T> {
 
   private static final String DEFAULT_PROTOCOL = "https";
 
-  /** Maintains the state of a request. This is used to retry requests with different parameters. */
-  @VisibleForTesting
-  static class RequestState {
-
-    @Nullable private final Authorization authorization;
-    private final URL url;
-
-    /**
-     * @param authorization authentication credentials
-     * @param url the endpoint URL to call
-     */
-    @VisibleForTesting
-    RequestState(@Nullable Authorization authorization, URL url) {
-      this.authorization = authorization;
-      this.url = url;
-    }
+  private static boolean isHttpsProtocol(URL url) {
+    return "https".equals(url.getProtocol());
   }
+
+  private final EventDispatcher eventDispatcher;
+  private final URL initialRequestUrl;
+  private final String userAgent;
+  private final RegistryEndpointProvider<T> registryEndpointProvider;
+  @Nullable private final Authorization authorization;
+  private final RegistryEndpointRequestProperties registryEndpointRequestProperties;
+  private final boolean allowInsecureRegistries;
 
   /** Makes a {@link Connection} to the specified {@link URL}. */
   private final Function<URL, Connection> connectionFactory;
 
-  private final RequestState initialRequestState;
-  private final String userAgent;
-  private final RegistryEndpointProvider<T> registryEndpointProvider;
-  private final RegistryEndpointRequestProperties registryEndpointRequestProperties;
-  private final boolean allowHttp;
+  /** Makes an insecure {@link Connection} to the specified {@link URL}. */
+  @Nullable private Function<URL, Connection> insecureConnectionFactory;
 
   /**
    * Constructs with parameters for making the request.
    *
+   * @param eventDispatcher the event dispatcher used for dispatching log events
    * @param userAgent {@code User-Agent} header to send with the request
    * @param apiRouteBase the endpoint's API root, without the protocol
    * @param registryEndpointProvider the {@link RegistryEndpointProvider} to the endpoint
    * @param authorization optional authentication credentials to use
    * @param registryEndpointRequestProperties properties of the registry endpoint request
-   * @param allowHttp if {@code true}, allows redirects and fallbacks to HTTP; otherwise, only
-   *     allows HTTPS
+   * @param allowInsecureRegistries if {@code true}, insecure connections will be allowed
    * @throws MalformedURLException if the URL generated for the endpoint is malformed
    */
   RegistryEndpointCaller(
+      EventDispatcher eventDispatcher,
       String userAgent,
       String apiRouteBase,
       RegistryEndpointProvider<T> registryEndpointProvider,
       @Nullable Authorization authorization,
       RegistryEndpointRequestProperties registryEndpointRequestProperties,
-      boolean allowHttp)
+      boolean allowInsecureRegistries)
       throws MalformedURLException {
     this(
+        eventDispatcher,
         userAgent,
         apiRouteBase,
         registryEndpointProvider,
         authorization,
         registryEndpointRequestProperties,
-        allowHttp,
-        Connection::new);
+        allowInsecureRegistries,
+        Connection.getConnectionFactory(),
+        null /* might never be used, so create lazily to delay throwing potential GeneralSecurityException */);
   }
 
   @VisibleForTesting
   RegistryEndpointCaller(
+      EventDispatcher eventDispatcher,
       String userAgent,
       String apiRouteBase,
       RegistryEndpointProvider<T> registryEndpointProvider,
       @Nullable Authorization authorization,
       RegistryEndpointRequestProperties registryEndpointRequestProperties,
-      boolean allowHttp,
-      Function<URL, Connection> connectionFactory)
+      boolean allowInsecureRegistries,
+      Function<URL, Connection> connectionFactory,
+      @Nullable Function<URL, Connection> insecureConnectionFactory)
       throws MalformedURLException {
-    this.initialRequestState =
-        new RequestState(
-            authorization,
-            registryEndpointProvider.getApiRoute(DEFAULT_PROTOCOL + "://" + apiRouteBase));
+    this.eventDispatcher = eventDispatcher;
+    this.initialRequestUrl =
+        registryEndpointProvider.getApiRoute(DEFAULT_PROTOCOL + "://" + apiRouteBase);
     this.userAgent = userAgent;
     this.registryEndpointProvider = registryEndpointProvider;
+    this.authorization = authorization;
     this.registryEndpointRequestProperties = registryEndpointRequestProperties;
-    this.allowHttp = allowHttp;
+    this.allowInsecureRegistries = allowInsecureRegistries;
     this.connectionFactory = connectionFactory;
+    this.insecureConnectionFactory = insecureConnectionFactory;
   }
 
   /**
@@ -138,35 +139,94 @@ class RegistryEndpointCaller<T> {
    */
   @Nullable
   T call() throws IOException, RegistryException {
-    return call(initialRequestState);
+    return callWithAllowInsecureRegistryHandling(initialRequestUrl);
+  }
+
+  @Nullable
+  private T callWithAllowInsecureRegistryHandling(URL url) throws IOException, RegistryException {
+    if (!isHttpsProtocol(url) && !allowInsecureRegistries) {
+      throw new InsecureRegistryException(url);
+    }
+
+    try {
+      return call(url, connectionFactory);
+
+    } catch (SSLPeerUnverifiedException ex) {
+      return handleUnverifiableServerException(url);
+
+    } catch (HttpHostConnectException ex) {
+      if (allowInsecureRegistries && isHttpsProtocol(url) && url.getPort() == -1) {
+        // Fall back to HTTP only if "url" had no port specified (i.e., we tried the default HTTPS
+        // port 443) and we could not connect to 443. It's worth trying port 80.
+        return fallBackToHttp(url);
+      }
+      throw ex;
+    }
+  }
+
+  @Nullable
+  private T handleUnverifiableServerException(URL url) throws IOException, RegistryException {
+    if (!allowInsecureRegistries) {
+      throw new InsecureRegistryException(url);
+    }
+
+    try {
+      eventDispatcher.dispatch(
+          LogEvent.info(
+              "Cannot verify server at " + url + ". Attempting again with no TLS verification."));
+      return call(url, getInsecureConnectionFactory());
+
+    } catch (SSLPeerUnverifiedException ex) {
+      return fallBackToHttp(url);
+    }
+  }
+
+  @Nullable
+  private T fallBackToHttp(URL url) throws IOException, RegistryException {
+    GenericUrl httpUrl = new GenericUrl(url);
+    httpUrl.setScheme("http");
+    eventDispatcher.dispatch(
+        LogEvent.info(
+            "Failed to connect to " + url + " over HTTPS. Attempting again with HTTP: " + httpUrl));
+    return call(httpUrl.toURL(), connectionFactory);
+  }
+
+  private Function<URL, Connection> getInsecureConnectionFactory() throws RegistryException {
+    try {
+      if (insecureConnectionFactory == null) {
+        insecureConnectionFactory = Connection.getInsecureConnectionFactory();
+      }
+      return insecureConnectionFactory;
+
+    } catch (GeneralSecurityException ex) {
+      throw new RegistryException("cannot turn off TLS peer verification", ex);
+    }
   }
 
   /**
-   * Calls the registry endpoint with a certain {@link RequestState}.
+   * Calls the registry endpoint with a certain {@link URL}.
    *
-   * @param requestState the state of the request - determines how to make the request and how to
-   *     process the response
+   * @param url the endpoint URL to call
    * @return an object representing the response, or {@code null}
    * @throws IOException for most I/O exceptions when making the request
    * @throws RegistryException for known exceptions when interacting with the registry
    */
-  @VisibleForTesting
   @Nullable
-  T call(RequestState requestState) throws IOException, RegistryException {
-    boolean isHttpProtocol = "http".equals(requestState.url.getProtocol());
-    if (!allowHttp && isHttpProtocol) {
-      throw new InsecureRegistryException(requestState.url);
-    }
+  private T call(URL url, Function<URL, Connection> connectionFactory)
+      throws IOException, RegistryException {
+    // Only sends authorization if using HTTPS or explicitly forcing over HTTP.
+    boolean sendCredentials =
+        isHttpsProtocol(url) || JibSystemProperties.isSendCredentialsOverHttpEnabled();
 
-    try (Connection connection = connectionFactory.apply(requestState.url)) {
+    try (Connection connection = connectionFactory.apply(url)) {
       Request.Builder requestBuilder =
           Request.builder()
               .setUserAgent(userAgent)
+              .setHttpTimeout(JibSystemProperties.getHttpTimeout())
               .setAccept(registryEndpointProvider.getAccept())
               .setBody(registryEndpointProvider.getContent());
-      // Only sends authorization if using HTTPS.
-      if (!isHttpProtocol || Boolean.getBoolean("sendCredentialsOverHttp")) {
-        requestBuilder.setAuthorization(requestState.authorization);
+      if (sendCredentials) {
+        requestBuilder.setAuthorization(authorization);
       }
       Response response =
           connection.send(registryEndpointProvider.getHttpMethod(), requestBuilder.build());
@@ -204,18 +264,16 @@ class RegistryEndpointCaller<T> {
 
         } else if (httpResponseException.getStatusCode()
             == HttpStatusCodes.STATUS_CODE_UNAUTHORIZED) {
-          if (isHttpProtocol) {
-            // Using HTTP, so credentials weren't sent.
-            throw new RegistryCredentialsNotSentException(
-                registryEndpointRequestProperties.getServerUrl(),
-                registryEndpointRequestProperties.getImageName());
-
-          } else {
-            // Using HTTPS, so credentials are missing.
+          if (sendCredentials) {
+            // Credentials are either missing or wrong.
             throw new RegistryUnauthorizedException(
                 registryEndpointRequestProperties.getServerUrl(),
                 registryEndpointRequestProperties.getImageName(),
                 httpResponseException);
+          } else {
+            throw new RegistryCredentialsNotSentException(
+                registryEndpointRequestProperties.getServerUrl(),
+                registryEndpointRequestProperties.getImageName());
           }
 
         } else if (httpResponseException.getStatusCode()
@@ -224,27 +282,14 @@ class RegistryEndpointCaller<T> {
                 == HttpStatusCodes.STATUS_CODE_MOVED_PERMANENTLY
             || httpResponseException.getStatusCode() == STATUS_CODE_PERMANENT_REDIRECT) {
           // 'Location' header can be relative or absolute.
-          URL redirectLocation =
-              new URL(requestState.url, httpResponseException.getHeaders().getLocation());
-          return call(new RequestState(requestState.authorization, redirectLocation));
+          URL redirectLocation = new URL(url, httpResponseException.getHeaders().getLocation());
+          return callWithAllowInsecureRegistryHandling(redirectLocation);
 
         } else {
           // Unknown
           throw httpResponseException;
         }
       }
-
-    } catch (HttpHostConnectException | SSLPeerUnverifiedException ex) {
-      // Tries to call with HTTP protocol if HTTPS failed to connect.
-      // Note that this will not succeed if 'allowHttp' is false.
-      if ("https".equals(requestState.url.getProtocol())) {
-        GenericUrl httpUrl = new GenericUrl(requestState.url);
-        httpUrl.setScheme("http");
-        return call(new RequestState(requestState.authorization, httpUrl.toURL()));
-      }
-
-      throw ex;
-
     } catch (NoHttpResponseException ex) {
       throw new RegistryNoResponseException(ex);
     }
